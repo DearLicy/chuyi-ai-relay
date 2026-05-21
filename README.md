@@ -1,6 +1,6 @@
 # 初一中转
 
-[![WordPress](https://img.shields.io/badge/WordPress-6.9%2B-21759B?logo=wordpress&logoColor=white)](https://wordpress.org/)
+[![WordPress](https://img.shields.io/badge/WordPress-7.0%2B-21759B?logo=wordpress&logoColor=white)](https://wordpress.org/)
 [![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?logo=php&logoColor=white)](https://www.php.net/)
 
 初一中转是一个 WordPress 插件，用于把自定义 OpenAI 兼容中转接口接入 WordPress AI Client / Connectors。插件支持文本生成、视觉输入和生图能力声明，并提供后台模型同步、能力勾选和模型测试页面。
