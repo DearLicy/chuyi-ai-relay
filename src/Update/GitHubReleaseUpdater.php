@@ -30,6 +30,7 @@ final class GitHubReleaseUpdater
     {
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'filterUpdateTransient'));
         add_filter('plugins_api', array(__CLASS__, 'filterPluginInfo'), 10, 3);
+        add_filter('upgrader_source_selection', array(__CLASS__, 'normalizeUpgradeSource'), 10, 4);
         add_filter('upgrader_post_install', array(__CLASS__, 'normalizeInstalledDirectory'), 10, 3);
     }
 
@@ -90,6 +91,45 @@ final class GitHubReleaseUpdater
         );
 
         return $info;
+    }
+
+    /**
+     * Keeps GitHub zipball extraction under the stable plugin directory before installation.
+     *
+     * @param string|\WP_Error $source Extracted source directory.
+     * @param string           $remoteSource Remote source path.
+     * @param mixed            $upgrader WordPress upgrader instance.
+     * @param array<mixed>     $hookExtra Upgrader hook metadata.
+     * @return string|\WP_Error
+     */
+    public static function normalizeUpgradeSource($source, string $remoteSource, $upgrader, array $hookExtra)
+    {
+        unset($remoteSource, $upgrader);
+
+        if (is_wp_error($source) || !is_string($source) || !is_dir($source)) {
+            return $source;
+        }
+
+        $pluginFile = plugin_basename(\CHUYI_AI_RELAY_FILE);
+        if (($hookExtra['plugin'] ?? '') !== $pluginFile) {
+            return $source;
+        }
+
+        $source = untrailingslashit($source);
+        if (basename($source) === self::slug()) {
+            return $source;
+        }
+
+        $target = trailingslashit(dirname($source)) . self::slug();
+        if (is_dir($target)) {
+            return $source;
+        }
+
+        if (!rename($source, $target)) {
+            return $source;
+        }
+
+        return $target;
     }
 
     /**
