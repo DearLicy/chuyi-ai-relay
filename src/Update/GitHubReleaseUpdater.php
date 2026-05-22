@@ -88,6 +88,7 @@ final class GitHubReleaseUpdater
         $info->banners = array();
         $info->icons = array(
             'svg' => \CHUYI_AI_RELAY_URL . 'assets/images/chuyi-relay.svg',
+            'default' => \CHUYI_AI_RELAY_URL . 'assets/images/chuyi-relay.svg',
         );
 
         return $info;
@@ -266,13 +267,17 @@ final class GitHubReleaseUpdater
         $object->new_version = (string) ($release['version'] ?? \CHUYI_AI_RELAY_VERSION);
         $object->url = (string) ($release['homepage'] ?? self::RELEASES_URL);
         $object->package = (string) ($release['package'] ?? '');
-        $object->tested = '';
+        $object->tested = '7.0';
         $object->requires = '6.9';
         $object->requires_php = '7.4';
         $object->last_updated = (string) ($release['published_at'] ?? '');
         $object->name = '初一 AI 中转';
         $object->author = '李初一';
         $object->homepage = self::RELEASES_URL;
+        $object->icons = array(
+            'svg' => \CHUYI_AI_RELAY_URL . 'assets/images/chuyi-relay.svg',
+            'default' => \CHUYI_AI_RELAY_URL . 'assets/images/chuyi-relay.svg',
+        );
 
         return $object;
     }
