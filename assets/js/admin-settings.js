@@ -258,7 +258,7 @@
         function saveRelays(nextRelays) {
             setSaving(true);
             return route('/settings', {
-                method: 'POST',
+            method: 'POST',
                 data: { relays: nextRelays || relays },
             })
                 .then(function (data) {
@@ -455,7 +455,7 @@
                         href: item.href,
                         className: currentPage === item.key ? 'is-active' : '',
                         onClick: function (event) {
-                            event.preventDefault();
+            event.preventDefault();
                             switchPage(item.key, item.href);
                         },
                     }, item.label);
@@ -742,7 +742,7 @@
 
         function handleHeaderKeyDown(event) {
             if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
+        event.preventDefault();
                 toggleOpen();
             }
         }

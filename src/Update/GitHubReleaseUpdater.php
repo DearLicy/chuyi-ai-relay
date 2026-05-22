@@ -148,6 +148,17 @@ final class GitHubReleaseUpdater
     }
 
     /**
+     * Forces a fresh release check and returns newer release metadata when available.
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function refreshAvailableUpdate(): ?array
+    {
+        delete_site_transient(self::CACHE_KEY);
+        return self::getAvailableUpdate();
+    }
+
+    /**
      * Fetches and caches the latest release.
      *
      * @return array<string,mixed>|null

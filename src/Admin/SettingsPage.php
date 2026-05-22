@@ -28,16 +28,22 @@ function chuyi_ai_relay_register_admin(): void
     add_action('admin_menu', __NAMESPACE__ . '\\chuyi_ai_relay_register_menu');
     add_action('admin_enqueue_scripts', __NAMESPACE__ . '\\chuyi_ai_relay_enqueue_assets');
     add_action('admin_notices', __NAMESPACE__ . '\\chuyi_ai_relay_render_admin_notices');
+    add_action('admin_post_chuyi_ai_relay_check_update', __NAMESPACE__ . '\\chuyi_ai_relay_handle_check_update');
     add_action('rest_api_init', __NAMESPACE__ . '\\chuyi_ai_relay_register_rest_routes');
     add_filter('plugin_action_links_' . plugin_basename(\CHUYI_AI_RELAY_FILE), __NAMESPACE__ . '\\chuyi_ai_relay_add_plugin_action_links');
 }
 
 function chuyi_ai_relay_add_plugin_action_links(array $links): array
 {
+    $checkUpdateUrl = wp_nonce_url(
+        admin_url('admin-post.php?action=chuyi_ai_relay_check_update'),
+        'chuyi_ai_relay_check_update'
+    );
+
     array_unshift(
         $links,
         '<a href="' . esc_url(admin_url('admin.php?page=' . CHUYI_AI_RELAY_HELP_SLUG)) . '">' . esc_html__('插件设置', 'chuyi-ai-relay') . '</a>',
-        '<a href="' . esc_url(wp_nonce_url(admin_url('update-core.php?force-check=1'), 'upgrade-core')) . '">' . esc_html__('检查更新', 'chuyi-ai-relay') . '</a>'
+        '<a href="' . esc_url($checkUpdateUrl) . '">' . esc_html__('检查更新', 'chuyi-ai-relay') . '</a>'
     );
 
     return $links;
@@ -168,11 +174,41 @@ function chuyi_ai_relay_is_own_admin_screen(string $hookSuffix): bool
         || strpos($hookSuffix, CHUYI_AI_RELAY_HELP_SLUG) !== false;
 }
 
+function chuyi_ai_relay_handle_check_update(): void
+{
+    if (!current_user_can('update_plugins')) {
+        wp_die(esc_html__('权限不足。', 'chuyi-ai-relay'));
+    }
+
+    check_admin_referer('chuyi_ai_relay_check_update');
+
+    $update = GitHubReleaseUpdater::refreshAvailableUpdate();
+    $status = $update !== null ? 'available' : 'latest';
+
+    wp_safe_redirect(add_query_arg(
+        array(
+            'page' => CHUYI_AI_RELAY_HELP_SLUG,
+            'chuyi_ai_relay_update_checked' => $status,
+        ),
+        admin_url('admin.php')
+    ));
+    exit;
+}
+
 function chuyi_ai_relay_render_admin_notices(): void
 {
     $screen = function_exists('get_current_screen') ? get_current_screen() : null;
     if (!$screen || empty($screen->id) || strpos((string) $screen->id, 'chuyi-ai-relay') === false) {
         return;
+    }
+
+    $checkedStatus = isset($_GET['chuyi_ai_relay_update_checked']) && is_string($_GET['chuyi_ai_relay_update_checked'])
+        ? sanitize_key(wp_unslash($_GET['chuyi_ai_relay_update_checked']))
+        : '';
+    if ($checkedStatus === 'latest') {
+        echo '<div class="notice notice-info is-dismissible">';
+        echo '<p>初一 AI 中转已完成更新检测，当前已是最新版本。</p>';
+        echo '</div>';
     }
 
     if (chuyi_ai_relay_needs_ai_plugin_approval()) {
