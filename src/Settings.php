@@ -1,6 +1,6 @@
 <?php
 /**
- * Shared settings helpers for 初一中转.
+ * Shared settings helpers for 初一 AI 中转.
  *
  * @package WordPress\ChuyiAiRelay
  */
@@ -14,24 +14,307 @@ namespace WordPress\ChuyiAiRelay;
  */
 final class Settings
 {
-    public const BASE_URL_OPTION = 'chuyi_ai_relay_base_url';
-    public const MODELS_OPTION = 'chuyi_ai_relay_models';
-    public const MODEL_CAPABILITIES_OPTION = 'chuyi_ai_relay_model_capabilities';
-    public const CONNECTOR_API_KEY_OPTION = 'connectors_ai_chuyi_relay_api_key';
-    public const API_KEY_CONSTANT = 'CHUYI_RELAY_API_KEY';
+    public const SLOTS_OPTION = 'chuyi_ai_relay_slots';
+    public const RELAYS_KEY = 'relays';
+    public const DEFAULT_SLOT_ID = 'default';
+    public const MODE_OPENAI = 'openai';
+    public const MODE_ANTHROPIC = 'anthropic';
 
     /**
-     * Returns the saved OpenAI-compatible base URL.
+     * Returns normalized relay rows from the dynamic group.
+     *
+     * @return list<array<string,mixed>>
      */
-    public static function getBaseUrl(): string
+    public static function getRelays(): array
     {
-        return self::normalizeBaseUrl((string) get_option(self::BASE_URL_OPTION, ''));
+        $stored = get_option(self::SLOTS_OPTION, null);
+        if (!is_array($stored)) {
+            return array(self::getDefaultRelay(0));
+        }
+
+        $rawRelays = isset($stored[self::RELAYS_KEY]) && is_array($stored[self::RELAYS_KEY])
+            ? $stored[self::RELAYS_KEY]
+            : array();
+
+        $relays = self::normalizeRelays($rawRelays);
+        if ($relays !== $rawRelays) {
+            update_option(self::SLOTS_OPTION, array(self::RELAYS_KEY => $relays), false);
+        }
+
+        return $relays;
     }
 
     /**
-     * Normalizes a relay root and guarantees an OpenAI-compatible /v1 base URL.
+     * Returns normalized slot settings keyed by internal slot ID.
+     *
+     * @return array<string,array<string,mixed>>
      */
-    public static function normalizeBaseUrl(string $url): string
+    public static function getSlots(): array
+    {
+        $slots = array();
+        foreach (self::getRelays() as $index => $relay) {
+            $slotId = $relay['key'];
+            $slots[$slotId] = self::relayToSlot($relay, $slotId, $index);
+        }
+
+        return $slots;
+    }
+
+    /**
+     * Returns configured provider slots that should be registered with the AI Client.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public static function getRegisterableSlots(): array
+    {
+        $registerable = array();
+        foreach (self::getSlots() as $slotId => $slot) {
+            if (!empty($slot['enabled']) && !empty($slot['site_url'])) {
+                $registerable[$slotId] = $slot;
+            }
+        }
+
+        return $registerable;
+    }
+
+    /**
+     * Returns one normalized slot.
+     *
+     * @return array<string,mixed>
+     */
+    public static function getSlot(string $slotId = self::DEFAULT_SLOT_ID): array
+    {
+        $slotId = self::normalizeSlotId($slotId);
+        $slots = self::getSlots();
+
+        if (isset($slots[$slotId])) {
+            return $slots[$slotId];
+        }
+
+        $default = self::getDefaultRelay(0);
+        $default['key'] = $slotId;
+        return self::relayToSlot($default, $slotId, 0);
+    }
+
+    /**
+     * Updates one slot by writing back to the dynamic relay group.
+     *
+     * @param array<string,mixed> $updates Slot fields to merge.
+     */
+    public static function updateSlot(string $slotId, array $updates): void
+    {
+        $slotId = self::normalizeSlotId($slotId);
+        $relays = self::getRelays();
+        $matched = false;
+
+        foreach ($relays as $index => $relay) {
+            if (($relay['key'] ?? '') !== $slotId) {
+                continue;
+            }
+
+            $relays[$index] = array_merge($relay, $updates, array('key' => $slotId));
+            $matched = true;
+            break;
+        }
+
+        if (!$matched) {
+            $relay = array_merge(self::getDefaultRelay(count($relays)), $updates, array('key' => $slotId));
+            $relays[] = $relay;
+        }
+
+        self::saveRelays($relays);
+    }
+
+    /**
+     * Normalizes the complete settings payload.
+     *
+     * @param mixed $data Raw save payload.
+     * @return array<string,mixed>
+     */
+    public static function normalizeOption($data): array
+    {
+        $relays = is_array($data) && isset($data[self::RELAYS_KEY]) && is_array($data[self::RELAYS_KEY])
+            ? $data[self::RELAYS_KEY]
+            : array();
+
+        return array(
+            self::RELAYS_KEY => self::normalizeRelays($relays),
+        );
+    }
+
+    /**
+     * Normalizes relay group rows for storage.
+     *
+     * @param mixed $relays Raw relay rows.
+     * @return list<array<string,mixed>>
+     */
+    public static function normalizeRelays($relays): array
+    {
+        if (!is_array($relays)) {
+            return array();
+        }
+
+        $normalized = array();
+        $seenKeys = array();
+        foreach (array_values($relays) as $index => $relay) {
+            if (!is_array($relay)) {
+                continue;
+            }
+
+            $normalizedRelay = self::normalizeRelay($relay, $index);
+            if (isset($seenKeys[$normalizedRelay['key']])) {
+                $normalizedRelay['key'] = self::generateRelayKey($seenKeys);
+            }
+
+            $seenKeys[$normalizedRelay['key']] = true;
+            $normalized[] = $normalizedRelay;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Saves relay group rows.
+     *
+     * @param list<array<string,mixed>> $relays Relay rows.
+     */
+    public static function saveRelays(array $relays): void
+    {
+        update_option(self::SLOTS_OPTION, array(self::RELAYS_KEY => self::normalizeRelays($relays)), false);
+        if (function_exists(__NAMESPACE__ . '\\approve_own_connectors')) {
+            approve_own_connectors();
+        }
+    }
+
+    /**
+     * Returns the provider ID for a slot.
+     */
+    public static function getProviderIdForSlot(string $slotId): string
+    {
+        $slotId = self::normalizeSlotId($slotId);
+        if ($slotId === self::DEFAULT_SLOT_ID) {
+            return 'chuyi-relay';
+        }
+
+        return 'chuyi-relay-' . str_replace('_', '-', $slotId);
+    }
+
+    /**
+     * Resolves a slot ID from a provider ID.
+     */
+    public static function getSlotIdForProviderId(string $providerId): string
+    {
+        if ($providerId === 'chuyi-relay') {
+            return self::DEFAULT_SLOT_ID;
+        }
+
+        if (preg_match('/^chuyi-relay-([a-z0-9][a-z0-9_-]*)$/', $providerId, $matches)) {
+            return self::normalizeSlotId(str_replace('-', '_', $matches[1]));
+        }
+
+        return self::DEFAULT_SLOT_ID;
+    }
+
+    /**
+     * Returns the connector option name for a slot API key.
+     */
+    public static function getConnectorApiKeyOption(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $providerId = self::getProviderIdForSlot($slotId);
+        $sanitizedId = str_replace('-', '_', $providerId);
+
+        return 'connectors_ai_' . $sanitizedId . '_api_key';
+    }
+
+    /**
+     * Returns the constant/env name for a slot API key.
+     */
+    public static function getApiKeyConstant(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $providerId = self::getProviderIdForSlot($slotId);
+        $sanitizedId = str_replace('-', '_', $providerId);
+
+        return strtoupper((string) preg_replace('/([a-z])([A-Z])/', '$1_$2', $sanitizedId)) . '_API_KEY';
+    }
+
+    /**
+     * Returns the saved relay root URL for a slot.
+     */
+    public static function getSiteUrl(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $slot = self::getSlot($slotId);
+        return isset($slot['site_url']) && is_string($slot['site_url']) ? $slot['site_url'] : '';
+    }
+
+    /**
+     * Returns the generated API base URL for a slot.
+     */
+    public static function getBaseUrl(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $siteUrl = self::getSiteUrl($slotId);
+        return $siteUrl === '' ? '' : rtrim($siteUrl, '/') . '/v1';
+    }
+
+    /**
+     * Returns the API mode for a slot.
+     */
+    public static function getMode(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $slot = self::getSlot($slotId);
+        return isset($slot['mode']) && in_array($slot['mode'], array(self::MODE_OPENAI, self::MODE_ANTHROPIC), true)
+            ? $slot['mode']
+            : self::MODE_OPENAI;
+    }
+
+    /**
+     * Returns the display name for a slot.
+     */
+    public static function getSlotName(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $slot = self::getSlot($slotId);
+        return isset($slot['name']) && is_string($slot['name']) && $slot['name'] !== ''
+            ? $slot['name']
+            : self::getDefaultRelayName(self::getSlotIndex($slotId));
+    }
+
+    /**
+     * Returns the favicon URL for a slot.
+     */
+    public static function getLogoUrl(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $siteUrl = self::getSiteUrl($slotId);
+        return $siteUrl === '' ? '' : esc_url_raw(rtrim($siteUrl, '/') . '/favicon.ico');
+    }
+
+    /**
+     * Builds an endpoint URL for the provider that owns the given provider ID.
+     */
+    public static function urlForProviderId(string $providerId, string $path = ''): string
+    {
+        return self::urlForSlot(self::getSlotIdForProviderId($providerId), $path);
+    }
+
+    /**
+     * Builds an endpoint URL for a slot.
+     */
+    public static function urlForSlot(string $slotId, string $path = ''): string
+    {
+        $baseUrl = self::getBaseUrl($slotId);
+        if ($baseUrl === '') {
+            $baseUrl = 'https://example.invalid/v1';
+        }
+
+        if ($path === '') {
+            return $baseUrl;
+        }
+
+        return rtrim($baseUrl, '/') . '/' . ltrim($path, '/');
+    }
+
+    /**
+     * Normalizes the relay root URL. Input must include http:// or https://.
+     */
+    public static function normalizeSiteUrl(string $url): string
     {
         $url = trim($url);
         if ($url === '') {
@@ -39,12 +322,8 @@ final class Settings
         }
 
         $url = preg_replace('/\s+/', '', $url);
-        if (!is_string($url) || $url === '') {
+        if (!is_string($url) || $url === '' || !preg_match('#^https?://#i', $url)) {
             return '';
-        }
-
-        if (!preg_match('#^https?://#i', $url)) {
-            $url = 'https://' . $url;
         }
 
         $parts = wp_parse_url($url);
@@ -52,79 +331,48 @@ final class Settings
             return '';
         }
 
-        $path = isset($parts['path']) ? rtrim($parts['path'], '/') : '';
-        $path = preg_replace('#/(models|chat/completions|responses|images/generations)$#', '', $path);
-        if (!is_string($path)) {
-            $path = '';
-        }
-        if ($path === '' || !preg_match('#/v\d+(?:\.[\d]+)?$#i', $path)) {
-            $path .= '/v1';
-        }
-
-        $normalized = strtolower((string) $parts['scheme']) . '://' . $parts['host'];
+        $scheme = strtolower((string) $parts['scheme']);
+        $host = strtolower((string) $parts['host']);
+        $normalized = $scheme . '://' . $host;
         if (!empty($parts['port'])) {
             $normalized .= ':' . (int) $parts['port'];
         }
-        $normalized .= $path;
 
-        return esc_url_raw(rtrim($normalized, '/'));
+        return esc_url_raw($normalized);
     }
 
     /**
      * Returns the API key from environment, constant, or Connectors option.
      */
-    public static function getApiKey(): string
+    public static function getApiKey(string $slotId = self::DEFAULT_SLOT_ID): string
     {
-        $env = getenv(self::API_KEY_CONSTANT);
+        $constantName = self::getApiKeyConstant($slotId);
+
+        $env = getenv($constantName);
         if (is_string($env) && $env !== '') {
             return $env;
         }
 
-        if (defined(self::API_KEY_CONSTANT)) {
-            $constant = constant(self::API_KEY_CONSTANT);
+        if (defined($constantName)) {
+            $constant = constant($constantName);
             if (is_scalar($constant) && (string) $constant !== '') {
                 return (string) $constant;
             }
         }
 
-        $option = get_option(self::CONNECTOR_API_KEY_OPTION, '');
+        $option = get_option(self::getConnectorApiKeyOption($slotId), '');
         return is_string($option) ? $option : '';
     }
 
     /**
-     * Returns models saved by the one-click fetch action.
+     * Returns models saved for a slot.
      *
      * @return list<array{id:string,name:string}>
      */
-    public static function getModels(): array
+    public static function getModels(string $slotId = self::DEFAULT_SLOT_ID): array
     {
-        $models = get_option(self::MODELS_OPTION, array());
-        if (!is_array($models)) {
-            return array();
-        }
-
-        $normalized = array();
-        foreach ($models as $model) {
-            if (!is_array($model) || empty($model['id']) || !is_string($model['id'])) {
-                continue;
-            }
-
-            $id = sanitize_text_field($model['id']);
-            if ($id === '') {
-                continue;
-            }
-
-            $name = isset($model['name']) && is_string($model['name']) && $model['name'] !== ''
-                ? sanitize_text_field($model['name'])
-                : $id;
-
-            $normalized[] = array(
-                'id'   => $id,
-                'name' => $name,
-            );
-        }
-
-        return $normalized;
+        $slot = self::getSlot($slotId);
+        return isset($slot['models']) && is_array($slot['models']) ? self::normalizeModels($slot['models']) : array();
     }
 
     /**
@@ -132,24 +380,12 @@ final class Settings
      *
      * @return array<string,list<string>>
      */
-    public static function getModelCapabilities(): array
+    public static function getModelCapabilities(string $slotId = self::DEFAULT_SLOT_ID): array
     {
-        $capabilities = get_option(self::MODEL_CAPABILITIES_OPTION, array());
-        if (!is_array($capabilities)) {
-            return array();
-        }
-
-        $normalized = array();
-        foreach ($capabilities as $modelId => $modelCapabilities) {
-            if (!is_string($modelId) || !is_array($modelCapabilities)) {
-                continue;
-            }
-
-            $normalizedCapabilities = self::sanitizeCapabilities($modelCapabilities);
-            $normalized[$modelId] = $normalizedCapabilities;
-        }
-
-        return $normalized;
+        $slot = self::getSlot($slotId);
+        return isset($slot['capabilities']) && is_array($slot['capabilities'])
+            ? self::normalizeCapabilityMap($slot['capabilities'])
+            : array();
     }
 
     /**
@@ -157,58 +393,35 @@ final class Settings
      *
      * @param list<array{id:string,name:string}> $models Models to save.
      */
-    public static function saveFetchedModels(array $models): void
+    public static function saveFetchedModels(array $models, string $slotId = self::DEFAULT_SLOT_ID): void
     {
-        $existingCapabilities = self::getModelCapabilities();
+        $models = self::normalizeModels($models);
+        $existingCapabilities = self::getModelCapabilities($slotId);
+        $rows = array();
         $nextCapabilities = array();
-        $nextModels = array();
 
         foreach ($models as $model) {
-            if (empty($model['id']) || !is_string($model['id'])) {
-                continue;
-            }
-
-            $id = sanitize_text_field($model['id']);
-            if ($id === '') {
-                continue;
-            }
-
-            $name = !empty($model['name']) && is_string($model['name']) ? sanitize_text_field($model['name']) : $id;
-            $nextModels[] = array(
-                'id'   => $id,
-                'name' => $name,
+            $id = $model['id'];
+            $capabilities = $existingCapabilities[$id] ?? self::inferCapabilities($id);
+            $rows[] = array(
+                'id'           => $id,
+                'name'         => $model['name'],
+                'capabilities' => $capabilities,
             );
-            $nextCapabilities[$id] = $existingCapabilities[$id] ?? self::inferCapabilities($id);
+            $nextCapabilities[$id] = $capabilities;
         }
 
-        update_option(self::MODELS_OPTION, $nextModels, false);
-        update_option(self::MODEL_CAPABILITIES_OPTION, $nextCapabilities, false);
+        self::updateSlot(
+            $slotId,
+            array(
+                'models'       => $rows,
+                'capabilities' => $nextCapabilities,
+            )
+        );
     }
 
     /**
-     * Saves manually selected model capabilities.
-     *
-     * @param array<string,list<string>> $capabilities Capability map.
-     */
-    public static function saveModelCapabilities(array $capabilities): void
-    {
-        $models = self::getModels();
-
-        $normalized = array();
-        foreach ($models as $model) {
-            $modelId = $model['id'];
-            $modelCapabilities = isset($capabilities[$modelId]) && is_array($capabilities[$modelId])
-                ? $capabilities[$modelId]
-                : array();
-
-            $normalized[$modelId] = self::sanitizeCapabilities($modelCapabilities);
-        }
-
-        update_option(self::MODEL_CAPABILITIES_OPTION, $normalized, false);
-    }
-
-    /**
-     * Infers model capabilities from common OpenAI-compatible model IDs.
+     * Infers model capabilities from common model IDs.
      *
      * @return list<string>
      */
@@ -224,7 +437,7 @@ final class Settings
             return array();
         }
 
-        if (preg_match('/(gpt-4o|gpt-4\.1|gpt-5|^o1|^o3|^o4|vision|\bvl\b|qwen-vl|glm-4v|llava)/', $id)) {
+        if (preg_match('/(gpt-4o|gpt-4\.1|gpt-5|^o1|^o3|^o4|vision|\bvl\b|qwen-vl|glm-4v|llava|claude-3|claude-sonnet|claude-opus|claude-haiku)/', $id)) {
             return array('text_generation', 'vision');
         }
 
@@ -252,5 +465,307 @@ final class Settings
         }
 
         return array_values($capabilities);
+    }
+
+    /**
+     * Normalizes one slot ID into the supported internal range.
+     */
+    private static function normalizeSlotId(string $slotId): string
+    {
+        $slotId = sanitize_key(str_replace('-', '_', strtolower(trim($slotId))));
+        if ($slotId === '') {
+            return self::DEFAULT_SLOT_ID;
+        }
+
+        if (preg_match('/^r(\d+)$/', $slotId, $matches)) {
+            $number = max(1, (int) $matches[1]);
+            return $number === 1 ? self::DEFAULT_SLOT_ID : (string) $number;
+        }
+
+        if (preg_match('/^\d+$/', $slotId)) {
+            $number = max(1, (int) $slotId);
+            return $number === 1 ? self::DEFAULT_SLOT_ID : (string) $number;
+        }
+
+        return $slotId;
+    }
+
+    /**
+     * Returns the zero-based relay index for display fallback only.
+     */
+    private static function getSlotIndex(string $slotId): int
+    {
+        $slots = array_keys(self::getSlots());
+        $index = array_search(self::normalizeSlotId($slotId), $slots, true);
+        return is_int($index) ? $index : 0;
+    }
+
+    /**
+     * Returns default relay row.
+     *
+     * @return array<string,mixed>
+     */
+    private static function getDefaultRelay(int $index): array
+    {
+        return array(
+            'key'     => $index === 0 ? self::DEFAULT_SLOT_ID : self::generateRelayKey(),
+            'enabled' => $index === 0,
+            'name'    => self::getDefaultRelayName($index),
+            'site_url'=> '',
+            'mode'    => self::MODE_OPENAI,
+            'models'  => array(),
+            'status'  => array(
+                'latency' => 0,
+                'ok'      => null,
+                'message' => '',
+                'checked' => '',
+            ),
+        );
+    }
+
+    /**
+     * Returns default relay display name.
+     */
+    private static function getDefaultRelayName(int $index): string
+    {
+        return $index === 0 ? '初一 AI 中转' : '初一 AI 中转 ' . ($index + 1);
+    }
+
+    /**
+     * Converts a normalized relay row to an internal slot.
+     *
+     * @param array<string,mixed> $relay Relay row.
+     * @return array<string,mixed>
+     */
+    private static function relayToSlot(array $relay, string $slotId, int $index): array
+    {
+        $relay = self::normalizeRelay($relay, $index);
+
+        return array(
+            'id'           => $slotId,
+            'key'          => $relay['key'],
+            'index'        => $index,
+            'provider_id'  => self::getProviderIdForSlot($slotId),
+            'enabled'      => (bool) $relay['enabled'],
+            'name'         => $relay['name'],
+            'mode'         => $relay['mode'],
+            'site_url'     => $relay['site_url'],
+            'models'       => $relay['models'],
+            'status'       => $relay['status'],
+            'capabilities' => self::capabilitiesFromModelRows($relay['models']),
+        );
+    }
+
+    /**
+     * Normalizes one relay row.
+     *
+     * @param array<string,mixed> $relay Raw relay row.
+     * @return array<string,mixed>
+     */
+    private static function normalizeRelay(array $relay, int $index): array
+    {
+        $default = self::getDefaultRelay($index);
+
+        $rawKey = isset($relay['key']) && is_string($relay['key']) ? $relay['key'] : '';
+        $key = self::normalizeRelayKey($rawKey);
+        if ($key === '') {
+            $key = $index === 0 ? self::DEFAULT_SLOT_ID : self::generateRelayKey();
+        }
+
+        $mode = isset($relay['mode']) && is_string($relay['mode']) ? sanitize_key($relay['mode']) : $default['mode'];
+        if (!in_array($mode, array(self::MODE_OPENAI, self::MODE_ANTHROPIC), true)) {
+            $mode = self::MODE_OPENAI;
+        }
+
+        $name = isset($relay['name']) && is_string($relay['name']) ? sanitize_text_field($relay['name']) : $default['name'];
+        if ($name === '') {
+            $name = $default['name'];
+        }
+
+        $rawUrl = isset($relay['site_url']) && is_string($relay['site_url']) ? $relay['site_url'] : '';
+        $siteUrl = self::normalizeSiteUrl($rawUrl);
+
+        $models = isset($relay['models']) && is_array($relay['models']) ? self::normalizeModels($relay['models']) : array();
+        $status = isset($relay['status']) && is_array($relay['status']) ? self::normalizeStatus($relay['status']) : $default['status'];
+
+        return array(
+            'key'     => $key,
+            'enabled' => isset($relay['enabled']) ? (bool) $relay['enabled'] : (bool) $default['enabled'],
+            'name'    => $name,
+            'site_url'=> $siteUrl,
+            'mode'    => $mode,
+            'models'  => $models,
+            'status'  => $status,
+        );
+    }
+
+    /**
+     * Normalizes a persisted relay key.
+     */
+    private static function normalizeRelayKey(string $key): string
+    {
+        $key = sanitize_key(str_replace('-', '_', strtolower(trim($key))));
+        if ($key === '') {
+            return '';
+        }
+
+        if (preg_match('/^r(\d+)$/', $key, $matches)) {
+            $number = max(1, (int) $matches[1]);
+            return $number === 1 ? self::DEFAULT_SLOT_ID : (string) $number;
+        }
+
+        if (preg_match('/^\d+$/', $key)) {
+            $number = max(1, (int) $key);
+            return $number === 1 ? self::DEFAULT_SLOT_ID : (string) $number;
+        }
+
+        return $key;
+    }
+
+    /**
+     * Generates a stable relay key for new group rows.
+     *
+     * @param array<string,bool> $reserved Existing keys.
+     */
+    public static function generateRelayKey(array $reserved = array()): string
+    {
+        do {
+            $key = substr(md5(uniqid('', true)), 0, 12);
+        } while (isset($reserved[$key]) || $key === self::DEFAULT_SLOT_ID || preg_match('/^\d+$/', $key));
+
+        return $key;
+    }
+
+    /**
+     * Normalizes runtime status data for one relay.
+     *
+     * @param mixed $status Raw status row.
+     * @return array{latency:int,ok:bool|null,message:string,checked:string}
+     */
+    private static function normalizeStatus($status): array
+    {
+        if (!is_array($status)) {
+            return array(
+                'latency' => 0,
+                'ok'      => null,
+                'message' => '',
+                'checked' => '',
+            );
+        }
+
+        $ok = null;
+        if (array_key_exists('ok', $status)) {
+            $ok = $status['ok'] === null ? null : (bool) $status['ok'];
+        }
+
+        $checked = isset($status['checked']) && is_string($status['checked']) ? sanitize_text_field($status['checked']) : '';
+
+        return array(
+            'latency' => isset($status['latency']) ? max(0, (int) $status['latency']) : 0,
+            'ok'      => $ok,
+            'message' => isset($status['message']) && is_string($status['message']) ? sanitize_text_field($status['message']) : '',
+            'checked' => preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/', $checked) ? $checked : '',
+        );
+    }
+
+    /**
+     * Normalizes model rows.
+     *
+     * @param mixed $models Raw model list.
+     * @return list<array{id:string,name:string,capabilities:list<string>}>
+     */
+    private static function normalizeModels($models): array
+    {
+        if (!is_array($models)) {
+            return array();
+        }
+
+        $normalized = array();
+        $seen = array();
+        foreach ($models as $model) {
+            if (!is_array($model) || empty($model['id']) || !is_string($model['id'])) {
+                continue;
+            }
+
+            $id = sanitize_text_field($model['id']);
+            if ($id === '' || isset($seen[$id])) {
+                continue;
+            }
+
+            $name = isset($model['name']) && is_string($model['name']) && $model['name'] !== ''
+                ? sanitize_text_field($model['name'])
+                : $id;
+
+            $normalized[] = array(
+                'id'           => $id,
+                'name'         => $name,
+                'capabilities' => isset($model['capabilities']) && is_array($model['capabilities'])
+                    ? self::sanitizeCapabilities($model['capabilities'])
+                    : self::inferCapabilities($id),
+            );
+            $seen[$id] = true;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Builds a capability map from model group rows.
+     *
+     * @param mixed $modelRows Raw model rows.
+     * @return array<string,list<string>>
+     */
+    private static function capabilitiesFromModelRows($modelRows): array
+    {
+        if (!is_array($modelRows)) {
+            return array();
+        }
+
+        $capabilities = array();
+        foreach ($modelRows as $row) {
+            if (!is_array($row) || empty($row['id']) || !is_string($row['id'])) {
+                continue;
+            }
+
+            $modelId = sanitize_text_field($row['id']);
+            if ($modelId === '') {
+                continue;
+            }
+
+            $capabilities[$modelId] = isset($row['capabilities']) && is_array($row['capabilities'])
+                ? self::sanitizeCapabilities($row['capabilities'])
+                : self::inferCapabilities($modelId);
+        }
+
+        return $capabilities;
+    }
+
+    /**
+     * Normalizes capability map.
+     *
+     * @param mixed $capabilities Raw capability map.
+     * @return array<string,list<string>>
+     */
+    private static function normalizeCapabilityMap($capabilities): array
+    {
+        if (!is_array($capabilities)) {
+            return array();
+        }
+
+        $normalized = array();
+        foreach ($capabilities as $modelId => $modelCapabilities) {
+            if (!is_string($modelId) || !is_array($modelCapabilities)) {
+                continue;
+            }
+
+            $modelId = sanitize_text_field($modelId);
+            if ($modelId === '') {
+                continue;
+            }
+
+            $normalized[$modelId] = self::sanitizeCapabilities($modelCapabilities);
+        }
+
+        return $normalized;
     }
 }

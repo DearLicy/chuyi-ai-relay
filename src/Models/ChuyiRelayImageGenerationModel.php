@@ -1,6 +1,6 @@
 <?php
 /**
- * 初一中转 image generation model.
+ * 初一 AI 中转 image generation model.
  *
  * @package WordPress\ChuyiAiRelay\Models
  */
@@ -16,10 +16,10 @@ use WordPress\AiClient\Providers\Http\Enums\HttpMethodEnum;
 use WordPress\AiClient\Providers\Http\Exception\ResponseException;
 use WordPress\AiClient\Providers\OpenAiCompatibleImplementation\AbstractOpenAiCompatibleImageGenerationModel;
 use WordPress\AiClient\Results\DTO\GenerativeAiResult;
-use WordPress\ChuyiAiRelay\Provider\ChuyiRelayProvider;
+use WordPress\ChuyiAiRelay\Settings;
 
 /**
- * Image generation through the relay's chat completions endpoint.
+ * Image generation through the relay's chat endpoint with image endpoint fallback.
  */
 final class ChuyiRelayImageGenerationModel extends AbstractOpenAiCompatibleImageGenerationModel
 {
@@ -30,21 +30,36 @@ final class ChuyiRelayImageGenerationModel extends AbstractOpenAiCompatibleImage
     {
         $httpTransporter = $this->getHttpTransporter();
         $params = $this->prepareGenerateImageParams($prompt);
-        $request = $this->createRequest(
-            HttpMethodEnum::POST(),
-            'chat/completions',
-            array('Content-Type' => 'application/json'),
-            $this->prepareChatCompletionsImageParams($params)
-        );
-        $request = $this->getRequestAuthentication()->authenticateRequest($request);
-        $response = $httpTransporter->send($request);
-        $this->throwIfNotSuccessful($response);
 
         $expectedMimeType = isset($params['output_format']) && is_string($params['output_format'])
             ? 'image/' . $params['output_format']
             : 'image/png';
 
-        return $this->parseChatCompletionsImageResponse($response, $expectedMimeType);
+        try {
+            $request = $this->createRequest(
+                HttpMethodEnum::POST(),
+                'chat/completions',
+                array('Content-Type' => 'application/json'),
+                $this->prepareChatCompletionsImageParams($params)
+            );
+            $request = $this->getRequestAuthentication()->authenticateRequest($request);
+            $response = $httpTransporter->send($request);
+            $this->throwIfNotSuccessful($response);
+
+            return $this->parseChatCompletionsImageResponse($response, $expectedMimeType);
+        } catch (\Throwable $exception) {
+            $request = $this->createRequest(
+                HttpMethodEnum::POST(),
+                'images/generations',
+                array('Content-Type' => 'application/json'),
+                $params
+            );
+            $request = $this->getRequestAuthentication()->authenticateRequest($request);
+            $response = $httpTransporter->send($request);
+            $this->throwIfNotSuccessful($response);
+
+            return $this->parseInlineImageResponse($response, $expectedMimeType);
+        }
     }
 
     /**
@@ -54,11 +69,95 @@ final class ChuyiRelayImageGenerationModel extends AbstractOpenAiCompatibleImage
     {
         return new Request(
             $method,
-            ChuyiRelayProvider::url($path),
+            Settings::urlForProviderId($this->providerMetadata()->getId(), $path),
             $headers,
             $data,
             $this->getRequestOptions()
         );
+    }
+
+    /**
+     * Parses image responses after converting remote image URLs to inline base64 data.
+     */
+    private function parseInlineImageResponse(Response $response, string $expectedMimeType): GenerativeAiResult
+    {
+        $responseData = $response->getData();
+        if (!is_array($responseData) || empty($responseData['data']) || !is_array($responseData['data'])) {
+            return $this->parseResponseToGenerativeAiResult($response, $expectedMimeType);
+        }
+
+        foreach ($responseData['data'] as $index => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            if (isset($item['url']) && is_string($item['url']) && $item['url'] !== '' && empty($item['b64_json'])) {
+                $base64 = $this->fetchImageUrlAsBase64($item['url']);
+                if ($base64 !== '') {
+                    $responseData['data'][$index]['b64_json'] = $base64;
+                    unset($responseData['data'][$index]['url']);
+                }
+            }
+
+            if (isset($responseData['data'][$index]['b64_json']) && is_string($responseData['data'][$index]['b64_json'])) {
+                $responseData['data'][$index]['b64_json'] = $this->normalizeBase64ImageData($responseData['data'][$index]['b64_json']);
+            }
+        }
+
+        $body = wp_json_encode($responseData);
+        if (!is_string($body)) {
+            throw ResponseException::fromInvalidData($this->providerMetadata()->getName(), 'body', 'The response could not be encoded.');
+        }
+
+        return $this->parseResponseToGenerativeAiResult(
+            new Response($response->getStatusCode(), $response->getHeaders(), $body),
+            $expectedMimeType
+        );
+    }
+
+    /**
+     * Downloads a generated image URL and returns plain base64 data.
+     */
+    private function fetchImageUrlAsBase64(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || !preg_match('#^https?://#i', $url)) {
+            return '';
+        }
+
+        $response = wp_remote_get($url, array(
+            'timeout' => 30,
+            'redirection' => 3,
+            'headers' => array(
+                'Accept' => 'image/*,*/*;q=0.8',
+                'User-Agent' => 'chuyi-ai-relay/' . \CHUYI_AI_RELAY_VERSION,
+            ),
+        ));
+
+        if (is_wp_error($response)) {
+            return '';
+        }
+
+        $status = (int) wp_remote_retrieve_response_code($response);
+        $body = (string) wp_remote_retrieve_body($response);
+        if ($status < 200 || $status >= 300 || $body === '') {
+            return '';
+        }
+
+        return base64_encode($body);
+    }
+
+    /**
+     * Converts data URIs to the plain base64 shape expected by ai-client File.
+     */
+    private function normalizeBase64ImageData(string $value): string
+    {
+        $value = trim($value);
+        if (preg_match('#^data:image/[a-z0-9.+-]+;base64,(.+)$#is', $value, $matches)) {
+            return preg_replace('/\s+/', '', $matches[1]) ?: '';
+        }
+
+        return preg_replace('/\s+/', '', $value) ?: '';
     }
 
     /**
@@ -132,7 +231,7 @@ final class ChuyiRelayImageGenerationModel extends AbstractOpenAiCompatibleImage
             throw ResponseException::fromInvalidData($this->providerMetadata()->getName(), 'body', 'The response could not be encoded.');
         }
 
-        return $this->parseResponseToGenerativeAiResult(
+        return $this->parseInlineImageResponse(
             new Response($response->getStatusCode(), $response->getHeaders(), $body),
             $expectedMimeType
         );
@@ -155,7 +254,7 @@ final class ChuyiRelayImageGenerationModel extends AbstractOpenAiCompatibleImage
                 return array('url' => $value);
             }
             if (preg_match('#data:image/[a-z0-9.+-]+;base64,[a-z0-9+/=]+#i', $value, $matches)) {
-                return array('b64_json' => $matches[0]);
+                return array('b64_json' => $this->normalizeBase64ImageData($matches[0]));
             }
             if (preg_match('#https?://\S+#i', $value, $matches)) {
                 return array('url' => rtrim($matches[0], '.,;:!?)"]\''));
@@ -181,7 +280,7 @@ final class ChuyiRelayImageGenerationModel extends AbstractOpenAiCompatibleImage
 
         foreach (array('b64_json', 'base64', 'b64') as $key) {
             if (isset($value[$key]) && is_string($value[$key])) {
-                return array('b64_json' => $value[$key]);
+                return array('b64_json' => $this->normalizeBase64ImageData($value[$key]));
             }
         }
 

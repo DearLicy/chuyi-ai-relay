@@ -1,6 +1,6 @@
 <?php
 /**
- * PSR-4 autoloader for 初一中转.
+ * PSR-4 autoloader for 初一 AI 中转.
  *
  * @package WordPress\ChuyiAiRelay
  */

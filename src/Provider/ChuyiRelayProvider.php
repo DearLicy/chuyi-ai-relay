@@ -1,6 +1,6 @@
 <?php
 /**
- * 初一中转 AI provider.
+ * 初一 AI 中转 AI providers.
  *
  * @package WordPress\ChuyiAiRelay\Provider
  */
@@ -26,19 +26,63 @@ use WordPress\ChuyiAiRelay\Models\ChuyiRelayTextGenerationModel;
 use WordPress\ChuyiAiRelay\Settings;
 
 /**
- * Registers 初一中转 as an OpenAI-compatible provider.
+ * Shared implementation for one relay slot.
  */
-final class ChuyiRelayProvider extends AbstractApiProvider
+abstract class AbstractChuyiRelayProvider extends AbstractApiProvider
 {
     public const ID = 'chuyi-relay';
+    public const SLOT_ID = 'default';
+
+    /**
+     * Returns the provider class for a relay slot and creates dynamic classes on demand.
+     *
+     * @return class-string<AbstractChuyiRelayProvider>
+     */
+    public static function providerClassForSlot(string $slotId): string
+    {
+        $slot = Settings::getSlot($slotId);
+        $slotId = $slot['id'];
+        if ($slotId === Settings::DEFAULT_SLOT_ID) {
+            return ChuyiRelayProvider::class;
+        }
+
+        $classSuffix = preg_replace('/[^A-Za-z0-9_]/', '_', ucwords($slotId, '_'));
+        $classSuffix = str_replace('_', '', (string) $classSuffix);
+        if ($classSuffix === '' || ctype_digit($classSuffix[0])) {
+            $classSuffix = 'K' . $classSuffix;
+        }
+
+        $className = __NAMESPACE__ . '\\ChuyiRelayProvider' . $classSuffix;
+        if (!class_exists($className, false)) {
+            eval('namespace ' . __NAMESPACE__ . '; final class ChuyiRelayProvider' . $classSuffix . ' extends AbstractChuyiRelayProvider { public const SLOT_ID = ' . var_export($slotId, true) . '; }');
+        }
+
+        /** @var class-string<AbstractChuyiRelayProvider> $className */
+        return $className;
+    }
+
+    /**
+     * Returns the slot ID for this provider class.
+     */
+    public static function slotId(): string
+    {
+        return static::SLOT_ID;
+    }
+
+    /**
+     * Returns the provider ID for this slot.
+     */
+    public static function providerId(): string
+    {
+        return Settings::getProviderIdForSlot(static::slotId());
+    }
 
     /**
      * {@inheritDoc}
      */
     protected static function baseUrl(): string
     {
-        $baseUrl = Settings::getBaseUrl();
-        return $baseUrl !== '' ? $baseUrl : 'https://example.invalid/v1';
+        return Settings::urlForSlot(static::slotId());
     }
 
     /**
@@ -46,7 +90,7 @@ final class ChuyiRelayProvider extends AbstractApiProvider
      */
     private static function credentialsUrl(): ?string
     {
-        $baseUrl = Settings::getBaseUrl();
+        $baseUrl = Settings::getBaseUrl(static::slotId());
         if ($baseUrl === '') {
             return null;
         }
@@ -61,6 +105,10 @@ final class ChuyiRelayProvider extends AbstractApiProvider
     {
         foreach ($modelMetadata->getSupportedCapabilities() as $capability) {
             if ($capability->isImageGeneration()) {
+                if (Settings::getMode(static::slotId()) === Settings::MODE_ANTHROPIC) {
+                    throw new RuntimeException('Anthropic 接口模式不支持生图模型。');
+                }
+
                 return new ChuyiRelayImageGenerationModel($modelMetadata, $providerMetadata);
             }
         }
@@ -71,7 +119,7 @@ final class ChuyiRelayProvider extends AbstractApiProvider
             }
         }
 
-        throw new RuntimeException('初一中转暂不支持该模型能力。');
+        throw new RuntimeException('初一 AI 中转暂不支持该模型能力。');
     }
 
     /**
@@ -79,24 +127,21 @@ final class ChuyiRelayProvider extends AbstractApiProvider
      */
     protected static function createProviderMetadata(): ProviderMetadata
     {
-        $credentialsUrl = self::credentialsUrl();
+        $mode = Settings::getMode(static::slotId());
+        $modeLabel = $mode === Settings::MODE_ANTHROPIC ? 'Anthropic' : 'OpenAI';
 
         $args = array(
-            self::ID,
-            '初一中转',
+            static::providerId(),
+            Settings::getSlotName(static::slotId()),
             ProviderTypeEnum::server(),
-            $credentialsUrl,
+            self::credentialsUrl(),
             RequestAuthenticationMethod::apiKey(),
         );
 
         if (version_compare(AiClient::VERSION, '1.2.0', '>=')) {
             $args[] = function_exists('__')
-                ? __('通过自定义 OpenAI 协议接口提供文本、视觉和生图能力。', 'chuyi-ai-relay')
-                : '通过自定义 OpenAI 协议接口提供文本、视觉和生图能力。';
-        }
-
-        if (version_compare(AiClient::VERSION, '1.3.0', '>=')) {
-            $args[] = \CHUYI_AI_RELAY_DIR . 'assets/images/chuyi-relay.svg';
+                ? sprintf(__('通过自定义 %s 协议中转接口提供 AI 能力。', 'chuyi-ai-relay'), $modeLabel)
+                : sprintf('通过自定义 %s 协议中转接口提供 AI 能力。', $modeLabel);
         }
 
         return new ProviderMetadata(...$args);
@@ -107,7 +152,7 @@ final class ChuyiRelayProvider extends AbstractApiProvider
      */
     protected static function createProviderAvailability(): ProviderAvailabilityInterface
     {
-        return new ChuyiRelayProviderAvailability();
+        return new ChuyiRelayProviderAvailability(static::slotId());
     }
 
     /**
@@ -115,6 +160,15 @@ final class ChuyiRelayProvider extends AbstractApiProvider
      */
     protected static function createModelMetadataDirectory(): ModelMetadataDirectoryInterface
     {
-        return new ChuyiRelayModelMetadataDirectory();
+        return new ChuyiRelayModelMetadataDirectory(static::slotId());
     }
+}
+
+/**
+ * Primary relay slot.
+ */
+final class ChuyiRelayProvider extends AbstractChuyiRelayProvider
+{
+    public const ID = 'chuyi-relay';
+    public const SLOT_ID = 'default';
 }

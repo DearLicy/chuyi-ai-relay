@@ -1,6 +1,6 @@
 <?php
 /**
- * 初一中转 model metadata directory.
+ * 初一 AI 中转 model metadata directory.
  *
  * @package WordPress\ChuyiAiRelay\Metadata
  */
@@ -13,6 +13,8 @@ use WordPress\AiClient\AiClient;
 use WordPress\AiClient\Files\Enums\FileTypeEnum;
 use WordPress\AiClient\Files\Enums\MediaOrientationEnum;
 use WordPress\AiClient\Messages\Enums\ModalityEnum;
+use WordPress\AiClient\Providers\Http\Contracts\RequestAuthenticationInterface;
+use WordPress\AiClient\Providers\Http\DTO\ApiKeyRequestAuthentication;
 use WordPress\AiClient\Providers\Http\DTO\Request;
 use WordPress\AiClient\Providers\Http\DTO\Response;
 use WordPress\AiClient\Providers\Http\Enums\HttpMethodEnum;
@@ -22,14 +24,40 @@ use WordPress\AiClient\Providers\Models\DTO\SupportedOption;
 use WordPress\AiClient\Providers\Models\Enums\CapabilityEnum;
 use WordPress\AiClient\Providers\Models\Enums\OptionEnum;
 use WordPress\AiClient\Providers\OpenAiCompatibleImplementation\AbstractOpenAiCompatibleModelMetadataDirectory;
-use WordPress\ChuyiAiRelay\Provider\ChuyiRelayProvider;
+use WordPress\ChuyiAiRelay\Provider\ChuyiRelayAnthropicApiKeyRequestAuthentication;
 use WordPress\ChuyiAiRelay\Settings;
 
 /**
- * Converts OpenAI-compatible /models responses into WordPress AI model metadata.
+ * Converts relay /models responses into WordPress AI model metadata.
  */
 final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleModelMetadataDirectory
 {
+    /**
+     * @var string Relay slot ID.
+     */
+    private string $slotId;
+
+    /**
+     * Constructor.
+     */
+    public function __construct(string $slotId = Settings::DEFAULT_SLOT_ID)
+    {
+        $this->slotId = $slotId;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function getRequestAuthentication(): RequestAuthenticationInterface
+    {
+        $requestAuthentication = parent::getRequestAuthentication();
+        if (Settings::getMode($this->slotId) !== Settings::MODE_ANTHROPIC || !$requestAuthentication instanceof ApiKeyRequestAuthentication) {
+            return $requestAuthentication;
+        }
+
+        return new ChuyiRelayAnthropicApiKeyRequestAuthentication($requestAuthentication->getApiKey());
+    }
+
     /**
      * Uses locally saved model IDs first; falls back to /models only when no local list exists.
      *
@@ -37,7 +65,7 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
      */
     protected function sendListModelsRequest(): array
     {
-        $savedModels = Settings::getModels();
+        $savedModels = Settings::getModels($this->slotId);
         if (!empty($savedModels)) {
             $models = array();
             foreach ($savedModels as $model) {
@@ -62,7 +90,7 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
     {
         return new Request(
             $method,
-            ChuyiRelayProvider::url($path),
+            Settings::urlForSlot($this->slotId, $path),
             $headers,
             $data
         );
@@ -75,7 +103,7 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
     {
         $responseData = $response->getData();
         if (!is_array($responseData) || empty($responseData['data']) || !is_array($responseData['data'])) {
-            throw ResponseException::fromMissingData('初一中转', 'data');
+            throw ResponseException::fromMissingData(Settings::getSlotName($this->slotId), 'data');
         }
 
         $models = array();
@@ -89,9 +117,16 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
                 continue;
             }
 
-            $modelName = isset($modelData['name']) && is_string($modelData['name']) && $modelData['name'] !== ''
-                ? sanitize_text_field($modelData['name'])
-                : $modelId;
+            $modelName = '';
+            foreach (array('name', 'display_name') as $nameKey) {
+                if (isset($modelData[$nameKey]) && is_string($modelData[$nameKey]) && $modelData[$nameKey] !== '') {
+                    $modelName = sanitize_text_field($modelData[$nameKey]);
+                    break;
+                }
+            }
+            if ($modelName === '') {
+                $modelName = $modelId;
+            }
 
             $models[] = new ModelMetadata(
                 $modelId,
@@ -102,7 +137,7 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
         }
 
         if (empty($models)) {
-            throw ResponseException::fromMissingData('初一中转', 'data[].id');
+            throw ResponseException::fromMissingData(Settings::getSlotName($this->slotId), 'data[].id');
         }
 
         usort($models, array($this, 'sortModels'));
@@ -110,11 +145,20 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
     }
 
     /**
-     * Keeps cache entries separate when the relay endpoint changes.
+     * Keeps cache entries separate when endpoint, mode, model list, or capabilities change.
      */
     protected function getBaseCacheKey(): string
     {
-        return 'ai_client_' . AiClient::VERSION . '_' . md5(static::class . '|' . Settings::getBaseUrl());
+        $cacheState = array(
+            'class'        => static::class,
+            'slotId'       => $this->slotId,
+            'mode'         => Settings::getMode($this->slotId),
+            'baseUrl'      => Settings::getBaseUrl($this->slotId),
+            'models'       => Settings::getModels($this->slotId),
+            'capabilities' => Settings::getModelCapabilities($this->slotId),
+        );
+
+        return 'ai_client_' . AiClient::VERSION . '_' . md5((string) wp_json_encode($cacheState));
     }
 
     /**
@@ -124,8 +168,15 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
      */
     private function getCapabilitiesForModel(string $modelId): array
     {
-        $capabilityMap = Settings::getModelCapabilities();
+        $capabilityMap = Settings::getModelCapabilities($this->slotId);
         $capabilities = $capabilityMap[$modelId] ?? Settings::inferCapabilities($modelId);
+
+        if (Settings::getMode($this->slotId) === Settings::MODE_ANTHROPIC) {
+            $capabilities = array_values(array_diff($capabilities, array('image_generation')));
+            if (empty($capabilities)) {
+                $capabilities = array('text_generation');
+            }
+        }
 
         if (in_array('image_generation', $capabilities, true)) {
             return array(CapabilityEnum::imageGeneration());
@@ -148,8 +199,15 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
      */
     private function getOptionsForModel(string $modelId): array
     {
-        $capabilityMap = Settings::getModelCapabilities();
+        $capabilityMap = Settings::getModelCapabilities($this->slotId);
         $capabilities = $capabilityMap[$modelId] ?? Settings::inferCapabilities($modelId);
+
+        if (Settings::getMode($this->slotId) === Settings::MODE_ANTHROPIC) {
+            $capabilities = array_values(array_diff($capabilities, array('image_generation')));
+            if (empty($capabilities)) {
+                $capabilities = array('text_generation');
+            }
+        }
 
         if (in_array('image_generation', $capabilities, true)) {
             return $this->getImageOptions($modelId);
@@ -178,17 +236,12 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
                 array(ModalityEnum::text()),
             );
 
-        return array(
+        $options = array(
             new SupportedOption(OptionEnum::systemInstruction()),
-            new SupportedOption(OptionEnum::candidateCount()),
             new SupportedOption(OptionEnum::maxTokens()),
             new SupportedOption(OptionEnum::temperature()),
             new SupportedOption(OptionEnum::topP()),
             new SupportedOption(OptionEnum::stopSequences()),
-            new SupportedOption(OptionEnum::presencePenalty()),
-            new SupportedOption(OptionEnum::frequencyPenalty()),
-            new SupportedOption(OptionEnum::logprobs()),
-            new SupportedOption(OptionEnum::topLogprobs()),
             new SupportedOption(OptionEnum::outputMimeType(), array('text/plain', 'application/json')),
             new SupportedOption(OptionEnum::outputSchema()),
             new SupportedOption(OptionEnum::functionDeclarations()),
@@ -196,6 +249,20 @@ final class ChuyiRelayModelMetadataDirectory extends AbstractOpenAiCompatibleMod
             new SupportedOption(OptionEnum::outputModalities(), array(array(ModalityEnum::text()))),
             new SupportedOption(OptionEnum::customOptions()),
         );
+
+        if (Settings::getMode($this->slotId) === Settings::MODE_OPENAI) {
+            $options[] = new SupportedOption(OptionEnum::candidateCount());
+            $options[] = new SupportedOption(OptionEnum::presencePenalty());
+            $options[] = new SupportedOption(OptionEnum::frequencyPenalty());
+            $options[] = new SupportedOption(OptionEnum::logprobs());
+            $options[] = new SupportedOption(OptionEnum::topLogprobs());
+        }
+
+        if (Settings::getMode($this->slotId) === Settings::MODE_ANTHROPIC) {
+            $options[] = new SupportedOption(OptionEnum::topK());
+        }
+
+        return $options;
     }
 
     /**
