@@ -19,6 +19,9 @@ final class Settings
     public const DEFAULT_SLOT_ID = 'default';
     public const MODE_OPENAI = 'openai';
     public const MODE_ANTHROPIC = 'anthropic';
+    public const IMAGE_ENDPOINT_AUTO = 'auto';
+    public const IMAGE_ENDPOINT_IMAGE = 'image';
+    public const IMAGE_ENDPOINT_CHAT = 'chat';
 
     /**
      * Returns normalized relay rows from the dynamic group.
@@ -264,6 +267,17 @@ final class Settings
         return isset($slot['mode']) && in_array($slot['mode'], array(self::MODE_OPENAI, self::MODE_ANTHROPIC), true)
             ? $slot['mode']
             : self::MODE_OPENAI;
+    }
+
+    /**
+     * Returns the selected image generation endpoint for a slot.
+     */
+    public static function getImageEndpoint(string $slotId = self::DEFAULT_SLOT_ID): string
+    {
+        $slot = self::getSlot($slotId);
+        return isset($slot['image_endpoint']) && in_array($slot['image_endpoint'], array(self::IMAGE_ENDPOINT_IMAGE, self::IMAGE_ENDPOINT_CHAT, self::IMAGE_ENDPOINT_AUTO), true)
+            ? $slot['image_endpoint']
+            : self::IMAGE_ENDPOINT_IMAGE;
     }
 
     /**
@@ -513,6 +527,7 @@ final class Settings
             'name'    => self::getDefaultRelayName($index),
             'site_url'=> '',
             'mode'    => self::MODE_OPENAI,
+            'image_endpoint' => self::IMAGE_ENDPOINT_IMAGE,
             'models'  => array(),
             'status'  => array(
                 'latency' => 0,
@@ -549,6 +564,7 @@ final class Settings
             'enabled'      => (bool) $relay['enabled'],
             'name'         => $relay['name'],
             'mode'         => $relay['mode'],
+            'image_endpoint' => $relay['image_endpoint'],
             'site_url'     => $relay['site_url'],
             'models'       => $relay['models'],
             'status'       => $relay['status'],
@@ -577,6 +593,11 @@ final class Settings
             $mode = self::MODE_OPENAI;
         }
 
+        $imageEndpoint = isset($relay['image_endpoint']) && is_string($relay['image_endpoint']) ? sanitize_key($relay['image_endpoint']) : $default['image_endpoint'];
+        if (!in_array($imageEndpoint, array(self::IMAGE_ENDPOINT_IMAGE, self::IMAGE_ENDPOINT_CHAT, self::IMAGE_ENDPOINT_AUTO), true)) {
+            $imageEndpoint = self::IMAGE_ENDPOINT_IMAGE;
+        }
+
         $name = isset($relay['name']) && is_string($relay['name']) ? sanitize_text_field($relay['name']) : $default['name'];
         if ($name === '') {
             $name = $default['name'];
@@ -594,6 +615,7 @@ final class Settings
             'name'    => $name,
             'site_url'=> $siteUrl,
             'mode'    => $mode,
+            'image_endpoint' => $imageEndpoint,
             'models'  => $models,
             'status'  => $status,
         );

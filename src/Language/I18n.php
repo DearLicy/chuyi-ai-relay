@@ -13,13 +13,14 @@ if (!defined('ABSPATH')) {
     return;
 }
 
+register_i18n();
+
 function register_i18n(): void
 {
     add_filter('gettext', __NAMESPACE__ . '\\translate_text', 20, 3);
     add_filter('gettext_with_context', __NAMESPACE__ . '\\translate_text_with_context', 20, 4);
     add_action('admin_enqueue_scripts', __NAMESPACE__ . '\\enqueue_runtime_translations', 100);
     add_action('enqueue_block_editor_assets', __NAMESPACE__ . '\\enqueue_runtime_translations', 100);
-    add_action('admin_footer', __NAMESPACE__ . '\\print_admin_footer_translations', 100);
 }
 
 function translate_text(string $translation, string $text, string $domain): string
@@ -30,7 +31,11 @@ function translate_text(string $translation, string $text, string $domain): stri
         return translate_from_map($text, ai_zh_cn_map(), $translation);
     }
 
-    if ($domain === 'chuyi-ai-relay' && !is_zh_locale($locale)) {
+    if ($domain === 'chuyi-ai-relay') {
+        if (is_zh_locale($locale)) {
+            return translate_from_map($text, relay_zh_cn_map(), $translation);
+        }
+
         return translate_from_map($text, relay_en_us_map(), $translation);
     }
 
@@ -45,50 +50,22 @@ function translate_text_with_context(string $translation, string $text, string $
 function enqueue_runtime_translations(): void
 {
     $locale = determine_locale();
-    $scripts = array(
-        'wp-i18n',
-        'chuyi-ai-relay-admin-settings',
-        'chuyi-ai-relay-connectors-ads',
-    );
 
-    foreach ($scripts as $handle) {
-        if (wp_script_is($handle, 'registered') || wp_script_is($handle, 'enqueued')) {
-            wp_enqueue_script($handle);
-        }
-    }
-
-    if (wp_script_is('wp-i18n', 'registered')) {
-        wp_enqueue_script('wp-i18n');
-        if (is_zh_locale($locale)) {
-            wp_add_inline_script('wp-i18n', build_set_locale_data_script('ai', ai_zh_cn_map()), 'after');
-        }
-        if (!is_zh_locale($locale)) {
-            wp_add_inline_script('wp-i18n', build_set_locale_data_script('chuyi-ai-relay', relay_en_us_map()), 'after');
-        }
-    }
-
-    if (!is_zh_locale($locale)) {
-        $script = build_dom_translation_script(relay_en_us_map(), 'chuyi-ai-relay-admin-root');
-        foreach (array('chuyi-ai-relay-admin-settings', 'chuyi-ai-relay-connectors-ads') as $handle) {
-            if (wp_script_is($handle, 'enqueued')) {
-                wp_add_inline_script($handle, $script, 'after');
-            }
-        }
-    }
-
-    if (is_zh_locale($locale)) {
-        wp_add_inline_script('wp-i18n', build_dom_translation_script(ai_zh_cn_map(), 'wpbody-content'), 'after');
-    }
-}
-
-function print_admin_footer_translations(): void
-{
-    $locale = determine_locale();
-    if (!is_zh_locale($locale)) {
+    if (!wp_script_is('wp-i18n', 'registered')) {
         return;
     }
 
-    echo '<script>' . build_dom_translation_script(ai_zh_cn_map(), 'wpbody-content') . '</script>';
+    wp_enqueue_script('wp-i18n');
+
+    if (is_zh_locale($locale)) {
+        wp_add_inline_script('wp-i18n', build_set_locale_data_script('ai', ai_zh_cn_map(), 'zh_CN'), 'after');
+        wp_add_inline_script('wp-i18n', build_set_locale_data_script('chuyi-ai-relay', relay_zh_cn_map(), 'zh_CN'), 'after');
+        wp_add_inline_script('wp-i18n', build_dom_translation_script(ai_zh_cn_map()), 'after');
+        return;
+    }
+
+    wp_add_inline_script('wp-i18n', build_set_locale_data_script('chuyi-ai-relay', relay_en_us_map(), 'en_US'), 'after');
+    wp_add_inline_script('wp-i18n', build_dom_translation_script(relay_en_us_map()), 'after');
 }
 
 function is_zh_locale(string $locale): bool
@@ -117,12 +94,12 @@ function normalize_space(string $text): string
 /**
  * @param array<string,string> $map
  */
-function build_set_locale_data_script(string $domain, array $map): string
+function build_set_locale_data_script(string $domain, array $map, string $lang): string
 {
     $messages = array(
         '' => array(
             'domain' => $domain,
-            'lang' => $domain === 'ai' ? 'zh_CN' : 'en_US',
+            'lang' => $lang,
             'plural-forms' => 'nplurals=1; plural=0;',
         ),
     );
@@ -137,9 +114,14 @@ function build_set_locale_data_script(string $domain, array $map): string
 /**
  * @param array<string,string> $map
  */
-function build_dom_translation_script(array $map, string $rootId): string
+function build_dom_translation_script(array $map): string
 {
-    return '(function(){var map=' . wp_json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ';var rootId=' . wp_json_encode($rootId) . ';function norm(v){return String(v||"").replace(/&amp;/g,"&").replace(/\u00a0/g," ").replace(/\s+/g," ").trim()}function t(v){var n=norm(v);if(Object.prototype.hasOwnProperty.call(map,n))return map[n];if(Object.prototype.hasOwnProperty.call(map,n.replace(/:$/,"")))return map[n.replace(/:$/,"")]+":";if(Object.prototype.hasOwnProperty.call(map,n+":"))return map[n+":"];return v}function walk(root){if(!root)return;var tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!norm(node.nodeValue))return NodeFilter.FILTER_REJECT;var p=node.parentNode;if(!p||/^(SCRIPT|STYLE|TEXTAREA|INPUT)$/i.test(p.nodeName))return NodeFilter.FILTER_REJECT;return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(tw.nextNode())nodes.push(tw.currentNode);nodes.forEach(function(node){var next=t(node.nodeValue);if(next!==node.nodeValue)node.nodeValue=next});Array.prototype.forEach.call(root.querySelectorAll("input[placeholder],textarea[placeholder],[aria-label],option"),function(el){if(el.placeholder)el.placeholder=t(el.placeholder);if(el.getAttribute&&el.getAttribute("aria-label"))el.setAttribute("aria-label",t(el.getAttribute("aria-label")));if(el.tagName==="OPTION")el.textContent=t(el.textContent)})}function run(){walk(document.getElementById(rootId)||document.body)}if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",run);else run();var mo=new MutationObserver(function(){window.clearTimeout(mo._t);mo._t=window.setTimeout(run,40)});mo.observe(document.body,{childList:true,subtree:true})})();';
+    $json = wp_json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json)) {
+        $json = '{}';
+    }
+
+    return '(function(){var map=' . $json . ';function norm(v){return String(v||"").replace(/\\s+/g," ").trim();}function tr(v){return map[v]||map[norm(v)]||"";}function apply(root){if(!root){return;}var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){var p=node.parentNode;if(!p||/^(SCRIPT|STYLE|TEXTAREA|CODE|PRE)$/i.test(p.nodeName)){return NodeFilter.FILTER_REJECT;}return tr(node.nodeValue)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_SKIP;}});var nodes=[];while(walker.nextNode()){nodes.push(walker.currentNode);}nodes.forEach(function(node){var translated=tr(node.nodeValue);if(translated){node.nodeValue=node.nodeValue.replace(norm(node.nodeValue),translated);}});root.querySelectorAll&&root.querySelectorAll("[placeholder],[aria-label],[title],input[type=button],input[type=submit]").forEach(function(el){["placeholder","aria-label","title"].forEach(function(attr){var value=el.getAttribute(attr);var translated=tr(value);if(translated){el.setAttribute(attr,translated);}});if((el.type==="button"||el.type==="submit")&&tr(el.value)){el.value=tr(el.value);}});}function run(){apply(document.body);}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",run);}else{run();}if(window.MutationObserver){new MutationObserver(function(mutations){mutations.forEach(function(mutation){mutation.addedNodes&&mutation.addedNodes.forEach(function(node){if(node.nodeType===1){apply(node);}});});}).observe(document.documentElement,{childList:true,subtree:true});}})();';
 }
 
 /**
@@ -164,6 +146,27 @@ function ai_zh_cn_map(): array
         'Ability not found' => '未找到能力',
         'Ability not found.' => '未找到能力。',
         'Ability slug is required.' => '必须提供能力别名。',
+        'Prompt instruction is required.' => '必须提供提示词指令。',
+        'Prompt override not found.' => '未找到提示词覆盖。',
+        'List AI prompt overrides' => '列出 AI 提示词覆盖',
+        'List saved system instruction overrides for WordPress AI abilities.' => '列出 WordPress AI 能力已保存的系统提示词覆盖。',
+        'Save AI prompt override' => '保存 AI 提示词覆盖',
+        'Create or update a system instruction override for a WordPress AI ability.' => '为 WordPress AI 能力创建或更新系统提示词覆盖。',
+        'Delete AI prompt override' => '删除 AI 提示词覆盖',
+        'Delete a saved system instruction override.' => '删除已保存的系统提示词覆盖。',
+        'Enable or disable AI prompt override' => '启用或停用 AI 提示词覆盖',
+        'Toggle a saved system instruction override without deleting it.' => '不删除配置，仅启用或停用已保存的系统提示词覆盖。',
+        'Target ability slug, for example ai/title-generation.' => '目标能力别名，例如 ai/title-generation。',
+        'Target ability slug.' => '目标能力别名。',
+        'Replacement or appended system instruction.' => '替换或追加的系统提示词。',
+        'Use replace to override the original prompt, or append to add extra requirements.' => '使用 replace 覆盖原始提示词，或使用 append 追加额外要求。',
+        'Whether this prompt override is active.' => '此提示词覆盖是否启用。',
+        'Whether this prompt override should be active.' => '此提示词覆盖是否应该启用。',
+        'Prompt override mode.' => '提示词覆盖模式。',
+        'Last update time in ISO 8601 format.' => 'ISO 8601 格式的最后更新时间。',
+        'Saved prompt overrides.' => '已保存的提示词覆盖。',
+        'Whether an override was deleted.' => '是否删除了覆盖配置。',
+        'You do not have permission to manage AI prompt overrides.' => '你没有管理 AI 提示词覆盖的权限。',
         'Additional AI-powered features.' => '其他 AI 驱动功能。',
         'Add more content to enable AI suggestions (approximately 150 words).' => '添加更多内容以启用 AI 建议（约 150 个词）。',
         'Automatically moderate comments based on toxicity detection and sentiment analysis. Requires an AI connector that includes support for text generation models.' => '基于有害性检测和情感分析自动审核评论。需要包含文本生成模型能力的 AI 连接器。',
@@ -861,9 +864,106 @@ function ai_zh_cn_map(): array
 /**
  * @return array<string,string>
  */
+function relay_zh_cn_map(): array
+{
+    return array(
+        'List AI prompt overrides' => '列出 AI 提示词覆盖',
+        'List managed default system instructions and saved overrides for WordPress AI abilities.' => '列出 WordPress AI 能力的默认系统提示词和已保存覆盖。',
+        'Save AI prompt override' => '保存 AI 提示词覆盖',
+        'Create or update a system instruction override for a WordPress AI ability.' => '为 WordPress AI 能力创建或更新系统提示词覆盖。',
+        'Delete AI prompt override' => '删除 AI 提示词覆盖',
+        'Delete a saved system instruction override.' => '删除已保存的系统提示词覆盖。',
+        'Enable or disable AI prompt override' => '启用或停用 AI 提示词覆盖',
+        'Toggle a saved system instruction override without deleting it.' => '不删除配置，仅启用或停用已保存的系统提示词覆盖。',
+        'Target ability slug, for example ai/title-generation.' => '目标能力别名，例如 ai/title-generation。',
+        'Target ability slug.' => '目标能力别名。',
+        'Replacement or appended system instruction.' => '替换或追加的系统提示词。',
+        'Use replace to override the original prompt, or append to add extra requirements.' => '使用 replace 覆盖原始提示词，或使用 append 追加额外要求。',
+        'Whether this prompt override is active.' => '此提示词覆盖是否启用。',
+        'Whether this prompt override should be active.' => '此提示词覆盖是否应该启用。',
+        'Prompt override mode.' => '提示词覆盖模式。',
+        'Last update time in ISO 8601 format.' => 'ISO 8601 格式的最后更新时间。',
+        'Saved prompt overrides.' => '已保存的提示词覆盖。',
+        'Whether an override was deleted.' => '是否删除了覆盖配置。',
+        'Ability slug is required.' => '必须提供能力别名。',
+        'Prompt instruction is required.' => '必须提供提示词指令。',
+        'Prompt override not found.' => '未找到提示词覆盖。',
+        'You do not have permission to manage AI prompt overrides.' => '你没有管理 AI 提示词覆盖的权限。',
+        'Title Generation' => '标题生成',
+        'Excerpt Generation' => '摘要生成',
+        'Summarization' => '内容总结',
+        'Meta Description' => 'Meta 描述',
+        'Content Classification' => '内容分类',
+        'Content Resizing' => '内容改写',
+        'Editorial Notes' => '编辑建议',
+        'Editorial Updates' => '编辑更新',
+        'Comment Analysis' => '评论分析',
+        'Alt Text Generation' => '替代文本生成',
+        'Image Prompt Generation' => '图片提示词生成',
+        'Default system instruction used by the AI title generation ability.' => 'AI 标题生成能力使用的默认系统提示词。',
+        'Default system instruction used by the AI excerpt generation ability.' => 'AI 摘要生成能力使用的默认系统提示词。',
+        'Default system instruction used by the AI summarization ability. The editable baseline uses the medium length variant.' => 'AI 内容总结能力使用的默认系统提示词。可编辑基线使用中等长度版本。',
+        'Default system instruction used by the AI meta description ability.' => 'AI Meta 描述能力使用的默认系统提示词。',
+        'Default system instruction used by the AI content classification ability.' => 'AI 内容分类能力使用的默认系统提示词。',
+        'Default system instruction used by the AI content resizing ability. The editable baseline uses the rephrase variant.' => 'AI 内容改写能力使用的默认系统提示词。可编辑基线使用重述版本。',
+        'Default system instruction used by the AI editorial notes ability.' => 'AI 编辑建议能力使用的默认系统提示词。',
+        'Default system instruction used by the AI editorial updates ability.' => 'AI 编辑更新能力使用的默认系统提示词。',
+        'Default system instruction used by the AI comment analysis ability.' => 'AI 评论分析能力使用的默认系统提示词。',
+        'Default system instruction used by the AI alt text generation ability.' => 'AI 替代文本生成能力使用的默认系统提示词。',
+        'Default system instruction used by the AI image prompt generation ability.' => 'AI 图片提示词生成能力使用的默认系统提示词。',
+    );
+}
+
+/**
+ * @return array<string,string>
+ */
 function relay_en_us_map(): array
 {
     return array(
+        '列出 AI 提示词覆盖' => 'List AI prompt overrides',
+        '列出 WordPress AI 能力的默认系统提示词和已保存覆盖。' => 'List managed default system instructions and saved overrides for WordPress AI abilities.',
+        '保存 AI 提示词覆盖' => 'Save AI prompt override',
+        '为 WordPress AI 能力创建或更新系统提示词覆盖。' => 'Create or update a system instruction override for a WordPress AI ability.',
+        '删除 AI 提示词覆盖' => 'Delete AI prompt override',
+        '删除已保存的系统提示词覆盖。' => 'Delete a saved system instruction override.',
+        '启用或停用 AI 提示词覆盖' => 'Enable or disable AI prompt override',
+        '不删除配置，仅启用或停用已保存的系统提示词覆盖。' => 'Toggle a saved system instruction override without deleting it.',
+        '目标能力别名，例如 ai/title-generation。' => 'Target ability slug, for example ai/title-generation.',
+        '目标能力别名。' => 'Target ability slug.',
+        '替换或追加的系统提示词。' => 'Replacement or appended system instruction.',
+        '使用 replace 覆盖原始提示词，或使用 append 追加额外要求。' => 'Use replace to override the original prompt, or append to add extra requirements.',
+        '此提示词覆盖是否启用。' => 'Whether this prompt override is active.',
+        '此提示词覆盖是否应该启用。' => 'Whether this prompt override should be active.',
+        '提示词覆盖模式。' => 'Prompt override mode.',
+        'ISO 8601 格式的最后更新时间。' => 'Last update time in ISO 8601 format.',
+        '已保存的提示词覆盖。' => 'Saved prompt overrides.',
+        '是否删除了覆盖配置。' => 'Whether an override was deleted.',
+        '必须提供能力别名。' => 'Ability slug is required.',
+        '必须提供提示词指令。' => 'Prompt instruction is required.',
+        '未找到提示词覆盖。' => 'Prompt override not found.',
+        '你没有管理 AI 提示词覆盖的权限。' => 'You do not have permission to manage AI prompt overrides.',
+        '标题生成' => 'Title Generation',
+        '摘要生成' => 'Excerpt Generation',
+        '内容总结' => 'Summarization',
+        'Meta 描述' => 'Meta Description',
+        '内容分类' => 'Content Classification',
+        '内容改写' => 'Content Resizing',
+        '编辑建议' => 'Editorial Notes',
+        '编辑更新' => 'Editorial Updates',
+        '评论分析' => 'Comment Analysis',
+        '替代文本生成' => 'Alt Text Generation',
+        '图片提示词生成' => 'Image Prompt Generation',
+        'AI 标题生成能力使用的默认系统提示词。' => 'Default system instruction used by the AI title generation ability.',
+        'AI 摘要生成能力使用的默认系统提示词。' => 'Default system instruction used by the AI excerpt generation ability.',
+        'AI 内容总结能力使用的默认系统提示词。可编辑基线使用中等长度版本。' => 'Default system instruction used by the AI summarization ability. The editable baseline uses the medium length variant.',
+        'AI Meta 描述能力使用的默认系统提示词。' => 'Default system instruction used by the AI meta description ability.',
+        'AI 内容分类能力使用的默认系统提示词。' => 'Default system instruction used by the AI content classification ability.',
+        'AI 内容改写能力使用的默认系统提示词。可编辑基线使用重述版本。' => 'Default system instruction used by the AI content resizing ability. The editable baseline uses the rephrase variant.',
+        'AI 编辑建议能力使用的默认系统提示词。' => 'Default system instruction used by the AI editorial notes ability.',
+        'AI 编辑更新能力使用的默认系统提示词。' => 'Default system instruction used by the AI editorial updates ability.',
+        'AI 评论分析能力使用的默认系统提示词。' => 'Default system instruction used by the AI comment analysis ability.',
+        'AI 替代文本生成能力使用的默认系统提示词。' => 'Default system instruction used by the AI alt text generation ability.',
+        'AI 图片提示词生成能力使用的默认系统提示词。' => 'Default system instruction used by the AI image prompt generation ability.',
         '初一 AI 中转' => 'Chuyi AI Relay',
         '为 WordPress AI Client 增加多中转、多协议模型池，支持 OpenAI-compatible 与 Anthropic Messages 接入。' => 'Adds multi-relay, multi-protocol model pools to WordPress AI Client, with OpenAI-compatible and Anthropic Messages support.',
         '李初一' => 'Li Chuyi',
@@ -875,7 +975,26 @@ function relay_en_us_map(): array
         '初一 AI 中转 · 接入设置' => 'Chuyi AI Relay · Access Settings',
         '初一 AI 中转 · 中转管理' => 'Chuyi AI Relay · Relay Management',
         '初一 AI 中转 · 模型测试' => 'Chuyi AI Relay · Model Testing',
+        '初一 AI 中转 · 提示词管理' => 'Chuyi AI Relay · Prompt Management',
         '初一 AI 中转 · 使用说明' => 'Chuyi AI Relay · Usage Guide',
+        '提示词管理' => 'Prompt Management',
+        '中转站、模型和 AI 提示词增强能力。' => 'Relay, model, and AI prompt enhancement abilities.',
+        '这里列出 AI 插件默认能力的系统提示词。未启用覆盖时保持 AI 插件默认提示词；启用后使用你保存的内容。' => 'This page lists the default system instructions for AI plugin abilities. When an override is disabled, the AI plugin default is kept; when enabled, your saved content is used.',
+        '提示词覆盖已保存。' => 'Prompt override saved.',
+        '提示词覆盖已恢复默认。' => 'Prompt override reset to default.',
+        '提示词不能为空。' => 'Prompt cannot be empty.',
+        '当前状态：' => 'Current status:',
+        '已启用覆盖' => 'Override enabled',
+        '使用默认提示词' => 'Using default prompt',
+        '已自定义' => 'Customized',
+        '默认基线' => 'Default baseline',
+        '启用覆盖' => 'Enable override',
+        '覆盖模式' => 'Override mode',
+        '替换默认提示词' => 'Replace default prompt',
+        '追加到默认提示词' => 'Append to default prompt',
+        '保存时提示词不能为空。点击“恢复默认”会删除自定义覆盖，并回到 AI 插件当前默认提示词。' => 'The prompt cannot be empty when saved. Clicking “Reset to default” deletes the custom override and returns to the current AI plugin default prompt.',
+        '保存提示词' => 'Save Prompt',
+        '恢复默认' => 'Reset to Default',
         '文本' => 'Text',
         '视觉' => 'Vision',
         '生图' => 'Image',
@@ -884,6 +1003,19 @@ function relay_en_us_map(): array
         '等待测试。' => 'Waiting for test.',
         '加载失败。' => 'Failed to load.',
         '保存失败。' => 'Failed to save.',
+        '提示词加载失败。' => 'Failed to load prompts.',
+        '提示词保存失败。' => 'Failed to save prompt.',
+        '恢复默认失败。' => 'Failed to reset prompt.',
+        '正在加载提示词...' => 'Loading prompts...',
+        '查看和覆盖官方 AI 能力的默认系统提示词。' => 'View and override default system prompts for official AI abilities.',
+        '提示词覆盖配置' => 'Prompt Override Configuration',
+        '默认显示内置提示词。未启用覆盖时保持默认；启用覆盖后使用保存内容。' => 'Built-in prompts are shown by default. Disabled overrides keep defaults; enabled overrides use saved content.',
+        '刷新提示词' => 'Refresh Prompts',
+        '提示词内容' => 'Prompt Content',
+        '保存时提示词不能为空。恢复默认会删除自定义覆盖，并回到内置默认提示词。' => 'Prompt content cannot be empty when saved. Resetting deletes the custom override and returns to the built-in default prompt.',
+        '还没有可管理的提示词' => 'No manageable prompts yet',
+        '当前没有读取到可覆盖的默认提示词。' => 'No overridable default prompts were loaded.',
+        '重新加载' => 'Reload',
         '获取模型失败。' => 'Failed to fetch models.',
         '连通成功。' => 'Connection succeeded.',
         '连通失败。' => 'Connection failed.',
@@ -1007,5 +1139,3 @@ function relay_en_us_map(): array
         '虚拟币打赏地址' => 'Crypto donation address',
     );
 }
-
-register_i18n();

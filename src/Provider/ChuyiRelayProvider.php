@@ -172,3 +172,4 @@ final class ChuyiRelayProvider extends AbstractChuyiRelayProvider
     public const ID = 'chuyi-relay';
     public const SLOT_ID = 'default';
 }
+

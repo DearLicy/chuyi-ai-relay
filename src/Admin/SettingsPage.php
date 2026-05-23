@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 namespace WordPress\ChuyiAiRelay\Admin;
 
+use WordPress\ChuyiAiRelay\Prompts\DefaultPrompts;
+use WordPress\ChuyiAiRelay\Prompts\PromptOverrides;
 use WordPress\ChuyiAiRelay\Settings;
 use WordPress\ChuyiAiRelay\Update\GitHubReleaseUpdater;
 
@@ -20,6 +22,7 @@ const CHUYI_AI_RELAY_MENU_SLUG = 'chuyi-ai-relay';
 const CHUYI_AI_RELAY_SETTINGS_SLUG = 'chuyi-ai-relay-settings';
 const CHUYI_AI_RELAY_RELAYS_SLUG = 'chuyi-ai-relay-relays';
 const CHUYI_AI_RELAY_TEST_SLUG = 'chuyi-ai-relay-test';
+const CHUYI_AI_RELAY_PROMPTS_SLUG = 'chuyi-ai-relay-prompts';
 const CHUYI_AI_RELAY_HELP_SLUG = 'chuyi-ai-relay-help';
 const CHUYI_AI_RELAY_REST_NAMESPACE = 'chuyi-ai-relay/v1';
 
@@ -29,6 +32,7 @@ function chuyi_ai_relay_register_admin(): void
     add_action('admin_enqueue_scripts', __NAMESPACE__ . '\\chuyi_ai_relay_enqueue_assets');
     add_action('admin_notices', __NAMESPACE__ . '\\chuyi_ai_relay_render_admin_notices');
     add_action('admin_post_chuyi_ai_relay_check_update', __NAMESPACE__ . '\\chuyi_ai_relay_handle_check_update');
+    add_action('admin_post_chuyi_ai_relay_save_prompt_override', __NAMESPACE__ . '\\chuyi_ai_relay_handle_save_prompt_override');
     add_action('rest_api_init', __NAMESPACE__ . '\\chuyi_ai_relay_register_rest_routes');
     add_filter('plugin_action_links_' . plugin_basename(\CHUYI_AI_RELAY_FILE), __NAMESPACE__ . '\\chuyi_ai_relay_add_plugin_action_links');
 }
@@ -96,6 +100,15 @@ function chuyi_ai_relay_register_menu(): void
         CHUYI_AI_RELAY_TEST_SLUG,
         __NAMESPACE__ . '\\chuyi_ai_relay_render_test_page'
     );
+
+    add_submenu_page(
+        CHUYI_AI_RELAY_HELP_SLUG,
+        '初一 AI 中转 · 提示词管理',
+        '提示词管理',
+        'manage_options',
+        CHUYI_AI_RELAY_PROMPTS_SLUG,
+        __NAMESPACE__ . '\\chuyi_ai_relay_render_prompts_page'
+    );
 }
 
 function chuyi_ai_relay_render_settings_page(): void
@@ -111,6 +124,11 @@ function chuyi_ai_relay_render_relays_page(): void
 function chuyi_ai_relay_render_test_page(): void
 {
     chuyi_ai_relay_render_app_mount('test', '模型测试');
+}
+
+function chuyi_ai_relay_render_prompts_page(): void
+{
+    chuyi_ai_relay_render_app_mount('prompts', '提示词管理');
 }
 
 function chuyi_ai_relay_render_help_page(): void
@@ -152,10 +170,11 @@ function chuyi_ai_relay_enqueue_assets(string $hookSuffix): void
             'restUrl' => esc_url_raw(rest_url(CHUYI_AI_RELAY_REST_NAMESPACE)),
             'nonce'   => wp_create_nonce('wp_rest'),
             'pages'   => array(
-                'settings' => admin_url('admin.php?page=' . CHUYI_AI_RELAY_SETTINGS_SLUG),
-                'relays'   => admin_url('admin.php?page=' . CHUYI_AI_RELAY_RELAYS_SLUG),
-                'test'       => admin_url('admin.php?page=' . CHUYI_AI_RELAY_TEST_SLUG),
-                'help'       => admin_url('admin.php?page=' . CHUYI_AI_RELAY_HELP_SLUG),
+                'settings'  => admin_url('admin.php?page=' . CHUYI_AI_RELAY_SETTINGS_SLUG),
+                'relays'    => admin_url('admin.php?page=' . CHUYI_AI_RELAY_RELAYS_SLUG),
+                'test'      => admin_url('admin.php?page=' . CHUYI_AI_RELAY_TEST_SLUG),
+                'prompts'   => admin_url('admin.php?page=' . CHUYI_AI_RELAY_PROMPTS_SLUG),
+                'help'      => admin_url('admin.php?page=' . CHUYI_AI_RELAY_HELP_SLUG),
                 'connectors' => admin_url('options-connectors.php'),
             ),
             'assets'  => array(
@@ -171,6 +190,7 @@ function chuyi_ai_relay_is_own_admin_screen(string $hookSuffix): bool
     return strpos($hookSuffix, CHUYI_AI_RELAY_SETTINGS_SLUG) !== false
         || strpos($hookSuffix, CHUYI_AI_RELAY_RELAYS_SLUG) !== false
         || strpos($hookSuffix, CHUYI_AI_RELAY_TEST_SLUG) !== false
+        || strpos($hookSuffix, CHUYI_AI_RELAY_PROMPTS_SLUG) !== false
         || strpos($hookSuffix, CHUYI_AI_RELAY_HELP_SLUG) !== false;
 }
 
@@ -192,6 +212,54 @@ function chuyi_ai_relay_handle_check_update(): void
         ),
         admin_url('admin.php')
     ));
+    exit;
+}
+
+function chuyi_ai_relay_handle_save_prompt_override(): void
+{
+    if (!current_user_can('manage_options')) {
+        wp_die(esc_html__('权限不足。', 'chuyi-ai-relay'));
+    }
+
+    check_admin_referer('chuyi_ai_relay_save_prompt_override');
+
+    $ability = isset($_POST['ability']) && is_string($_POST['ability'])
+        ? sanitize_text_field(wp_unslash($_POST['ability']))
+        : '';
+
+    $redirectUrl = add_query_arg(
+        array('page' => CHUYI_AI_RELAY_PROMPTS_SLUG),
+        admin_url('admin.php')
+    );
+
+    if (isset($_POST['reset_prompt'])) {
+        PromptOverrides::delete($ability);
+        wp_safe_redirect(add_query_arg('chuyi_prompt_status', 'reset', $redirectUrl));
+        exit;
+    }
+
+    $instruction = isset($_POST['instruction']) && is_string($_POST['instruction'])
+        ? trim(wp_unslash($_POST['instruction']))
+        : '';
+    if ($instruction === '') {
+        wp_safe_redirect(add_query_arg('chuyi_prompt_status', 'error', $redirectUrl));
+        exit;
+    }
+
+    $mode = isset($_POST['mode']) && is_string($_POST['mode']) ? sanitize_key(wp_unslash($_POST['mode'])) : PromptOverrides::MODE_REPLACE;
+    $enabled = !empty($_POST['enabled']);
+
+    $result = PromptOverrides::save(
+        $ability,
+        array(
+            'instruction' => $instruction,
+            'mode'        => $mode,
+            'enabled'     => $enabled,
+        )
+    );
+
+    $status = is_wp_error($result) ? 'error' : 'saved';
+    wp_safe_redirect(add_query_arg('chuyi_prompt_status', $status, $redirectUrl));
     exit;
 }
 
@@ -300,6 +368,25 @@ function chuyi_ai_relay_register_rest_routes(): void
         'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_test_generation',
         'permission_callback' => $permission,
     ));
+
+    register_rest_route(CHUYI_AI_RELAY_REST_NAMESPACE, '/prompts', array(
+        'methods'             => 'GET',
+        'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_get_prompts',
+        'permission_callback' => $permission,
+    ));
+
+    register_rest_route(CHUYI_AI_RELAY_REST_NAMESPACE, '/prompts/(?P<ability>[a-z0-9\/_-]+)', array(
+        array(
+            'methods'             => 'POST',
+            'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_save_prompt',
+            'permission_callback' => $permission,
+        ),
+        array(
+            'methods'             => 'DELETE',
+            'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_reset_prompt',
+            'permission_callback' => $permission,
+        ),
+    ));
 }
 
 function chuyi_ai_relay_rest_permission(): bool
@@ -396,6 +483,55 @@ function chuyi_ai_relay_rest_test_generation(\WP_REST_Request $request): \WP_RES
     return rest_ensure_response(array('message' => $result['message']));
 }
 
+function chuyi_ai_relay_rest_get_prompts(): \WP_REST_Response
+{
+    return rest_ensure_response(array(
+        'prompts' => DefaultPrompts::managed(),
+    ));
+}
+
+function chuyi_ai_relay_rest_save_prompt(\WP_REST_Request $request): \WP_REST_Response
+{
+    $ability = sanitize_text_field((string) $request->get_param('ability'));
+    $params = $request->get_json_params();
+    if (!is_array($params)) {
+        $params = array();
+    }
+
+    $instruction = isset($params['instruction']) && is_string($params['instruction'])
+        ? trim($params['instruction'])
+        : '';
+    if ($instruction === '') {
+        return new \WP_REST_Response(array('message' => '提示词不能为空。'), 400);
+    }
+
+    $result = PromptOverrides::save($ability, array(
+        'instruction' => $instruction,
+        'mode'        => isset($params['mode']) && is_string($params['mode']) ? sanitize_key($params['mode']) : PromptOverrides::MODE_REPLACE,
+        'enabled'     => !empty($params['enabled']),
+    ));
+
+    if (is_wp_error($result)) {
+        return new \WP_REST_Response(array('message' => $result->get_error_message()), 400);
+    }
+
+    return rest_ensure_response(array(
+        'notice'  => array('status' => 'success', 'message' => '提示词覆盖已保存。'),
+        'prompts' => DefaultPrompts::managed(),
+    ));
+}
+
+function chuyi_ai_relay_rest_reset_prompt(\WP_REST_Request $request): \WP_REST_Response
+{
+    $ability = sanitize_text_field((string) $request->get_param('ability'));
+    PromptOverrides::delete($ability);
+
+    return rest_ensure_response(array(
+        'notice'  => array('status' => 'success', 'message' => '提示词覆盖已恢复默认。'),
+        'prompts' => DefaultPrompts::managed(),
+    ));
+}
+
 function chuyi_ai_relay_get_admin_payload(array $extra = array()): array
 {
     $relays = Settings::getRelays();
@@ -420,6 +556,11 @@ function chuyi_ai_relay_get_admin_payload(array $extra = array()): array
         'modes'  => array(
             array('label' => 'OpenAI Compatible', 'value' => Settings::MODE_OPENAI),
             array('label' => 'Anthropic Messages', 'value' => Settings::MODE_ANTHROPIC),
+        ),
+        'imageEndpoints' => array(
+            array('label' => '图片接口 /v1/images/generations', 'value' => Settings::IMAGE_ENDPOINT_IMAGE),
+            array('label' => '对话接口 /v1/chat/completions', 'value' => Settings::IMAGE_ENDPOINT_CHAT),
+            array('label' => '自动尝试：先图片接口，再对话接口', 'value' => Settings::IMAGE_ENDPOINT_AUTO),
         ),
         'capabilities' => array(
             array('label' => '文本', 'value' => 'text_generation'),
@@ -515,20 +656,27 @@ function chuyi_ai_relay_request_generation(string $slotId, string $model, string
             return array('ok' => false, 'message' => 'Anthropic Messages 模式不支持生图测试。');
         }
 
-        $chatResult = chuyi_ai_relay_request_chat_generation($slotId, $apiKey, $model, $prompt, true);
-        if ($chatResult['ok']) {
-            $chatResult['message'] = trim($chatResult['message']) ?: '对话接口返回成功，但未提取到图片内容。';
+        $imageEndpoint = Settings::getImageEndpoint($slotId);
+        if ($imageEndpoint === Settings::IMAGE_ENDPOINT_CHAT) {
+            $chatResult = chuyi_ai_relay_request_chat_generation($slotId, $apiKey, $model, $prompt, true);
+            $chatResult['message'] = trim($chatResult['message']) ?: '对话接口返回成功，但未提取到 base64 图片内容。';
             return $chatResult;
         }
 
         $imageResult = chuyi_ai_relay_request_image_generation($slotId, $apiKey, $model, $prompt);
-        if ($imageResult['ok']) {
+        if ($imageEndpoint === Settings::IMAGE_ENDPOINT_IMAGE || $imageResult['ok']) {
             return $imageResult;
+        }
+
+        $chatResult = chuyi_ai_relay_request_chat_generation($slotId, $apiKey, $model, $prompt, true);
+        if ($chatResult['ok']) {
+            $chatResult['message'] = trim($chatResult['message']) ?: '对话接口返回成功，但未提取到 base64 图片内容。';
+            return $chatResult;
         }
 
         return array(
             'ok' => false,
-            'message' => '对话接口生图失败：' . $chatResult['message'] . "\n" . '标准生图接口兜底失败：' . $imageResult['message'],
+            'message' => '图片接口生图失败：' . $imageResult['message'] . "\n" . '对话接口生图失败：' . $chatResult['message'],
         );
     }
 
@@ -574,7 +722,7 @@ function chuyi_ai_relay_request_chat_generation(string $slotId, string $apiKey, 
         return $result;
     }
 
-    return array('ok' => true, 'message' => chuyi_ai_relay_extract_generation_message($slotId, $result['body']));
+    return array('ok' => true, 'message' => chuyi_ai_relay_extract_generation_message($slotId, $result['body'], $image));
 }
 
 function chuyi_ai_relay_request_anthropic_generation(string $slotId, string $apiKey, string $model, string $prompt): array
@@ -667,12 +815,19 @@ function chuyi_ai_relay_extract_image_generation_message(string $body): string
 {
     $data = json_decode($body, true);
     if (!is_array($data)) {
-            return '';
-        }
+        return '';
+    }
 
     $items = isset($data['data']) && is_array($data['data']) ? $data['data'] : array();
-    $lines = array();
+    if (empty($items) && isset($data['image_urls']) && is_array($data['image_urls'])) {
+        foreach ($data['image_urls'] as $url) {
+            if (is_string($url) && $url !== '') {
+                $items[] = array('url' => $url);
+            }
+        }
+    }
 
+    $lines = array();
     foreach ($items as $index => $item) {
         if (!is_array($item)) {
             continue;
@@ -683,27 +838,27 @@ function chuyi_ai_relay_extract_image_generation_message(string $body): string
             : 'generated image ' . ($index + 1);
         $alt = str_replace(array('[', ']'), '', wp_strip_all_tags($alt));
 
-        if (isset($item['url']) && is_string($item['url']) && $item['url'] !== '') {
-            $lines[] = '![' . $alt . '](' . esc_url_raw($item['url']) . ')';
-            continue;
-        }
-
-        if (isset($item['b64_json']) && is_string($item['b64_json']) && $item['b64_json'] !== '') {
+        if (isset($item['b64_json']) && is_string($item['b64_json']) && trim($item['b64_json']) !== '') {
             $mime = isset($item['mime_type']) && is_string($item['mime_type']) && preg_match('#^image/[a-z0-9.+-]+$#i', $item['mime_type'])
                 ? strtolower($item['mime_type'])
                 : 'image/png';
             $lines[] = '![' . $alt . '](data:' . $mime . ';base64,' . trim($item['b64_json']) . ')';
+            continue;
+        }
+
+        if (isset($item['url']) && is_string($item['url']) && $item['url'] !== '') {
+            $lines[] = '![' . $alt . '](' . esc_url_raw($item['url']) . ')';
         }
     }
 
     return trim(implode("\n\n", $lines));
 }
 
-function chuyi_ai_relay_extract_generation_message(string $slotId, string $body): string
+function chuyi_ai_relay_extract_generation_message(string $slotId, string $body, bool $image = false): string
 {
     $data = json_decode($body, true);
     if (!is_array($data)) {
-        return wp_strip_all_tags($body);
+        return $image ? chuyi_ai_relay_extract_markdown_base64_images($body) : wp_strip_all_tags($body);
     }
 
     if (Settings::getMode($slotId) === Settings::MODE_ANTHROPIC && isset($data['content']) && is_array($data['content'])) {
@@ -713,14 +868,41 @@ function chuyi_ai_relay_extract_generation_message(string $slotId, string $body)
                 $parts[] = $part['text'];
             }
         }
-        return trim(implode("\n", $parts)) ?: 'Anthropic 请求成功。';
+        $message = trim(implode("\n", $parts));
+        return $image ? chuyi_ai_relay_extract_markdown_base64_images($message) : ($message ?: 'Anthropic 请求成功。');
     }
 
     if (isset($data['choices'][0]['message']['content']) && is_string($data['choices'][0]['message']['content'])) {
-        return $data['choices'][0]['message']['content'];
+        $message = $data['choices'][0]['message']['content'];
+        return $image ? chuyi_ai_relay_extract_markdown_base64_images($message) : $message;
     }
 
-    return wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) ?: '请求成功。';
+    $message = wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) ?: '请求成功。';
+    return $image ? chuyi_ai_relay_extract_markdown_base64_images($message) : $message;
+}
+
+function chuyi_ai_relay_extract_markdown_base64_images(string $text): string
+{
+    $text = trim($text);
+    if ($text === '') {
+        return '';
+    }
+
+    $lines = array();
+    if (preg_match_all('/!\[([^\]]*)\]\(\s*(data:image\/[a-z0-9.+-]+;base64,[^)\s]+)\s*\)/i', $text, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $match) {
+            $alt = str_replace(array('[', ']'), '', wp_strip_all_tags($match[1] !== '' ? $match[1] : 'generated image'));
+            $lines[] = '![' . $alt . '](' . preg_replace('/\s+/', '', $match[2]) . ')';
+        }
+    }
+
+    if (empty($lines) && preg_match_all('#data:image/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+#i', $text, $matches)) {
+        foreach ($matches[0] as $index => $dataUri) {
+            $lines[] = '![generated image ' . ($index + 1) . '](' . preg_replace('/\s+/', '', $dataUri) . ')';
+        }
+    }
+
+    return trim(implode("\n\n", array_values(array_unique($lines))));
 }
 
 function chuyi_ai_relay_get_inline_styles(): string
@@ -754,9 +936,16 @@ function chuyi_ai_relay_get_inline_styles(): string
         .chuyi-ai-relay-card__muted{color:#646970;font-size:13px}
         .chuyi-ai-relay-relay-list{display:grid;gap:16px}
         .chuyi-ai-relay-relay-cards{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
-        .chuyi-ai-relay-relay-card,.chuyi-ai-relay-test-card,.chuyi-ai-relay-stat{border:1px solid #dcdcde!important;border-radius:2px!important;box-shadow:none!important}
-        .chuyi-ai-relay-relay-card .components-card__body,.chuyi-ai-relay-test-card .components-card__body,.chuyi-ai-relay-stat .components-card__body{padding:20px!important}
+        .chuyi-ai-relay-relay-card,.chuyi-ai-relay-test-card,.chuyi-ai-relay-stat,.chuyi-ai-relay-prompt-card{border:1px solid #dcdcde!important;border-radius:2px!important;box-shadow:none!important}
+        .chuyi-ai-relay-relay-card .components-card__body,.chuyi-ai-relay-test-card .components-card__body,.chuyi-ai-relay-stat .components-card__body,.chuyi-ai-relay-prompt-card .components-card__body{padding:20px!important}
         .chuyi-ai-relay-relay-card__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}
+        .chuyi-ai-relay-prompt-list{display:grid;gap:16px}
+        .chuyi-ai-relay-prompt-card__head{align-items:flex-start;display:flex;gap:16px;justify-content:space-between;margin-bottom:14px}
+        .chuyi-ai-relay-prompt-card__head h3{color:#1e1e1e;font-size:18px;font-weight:500;line-height:1.35;margin:0 0 6px}
+        .chuyi-ai-relay-prompt-card__head code{background:#f6f7f7;color:#646970;display:inline-block;font-size:12px;max-width:100%;word-break:break-all}
+        .chuyi-ai-relay-prompt-grid{margin-top:16px}
+        .chuyi-ai-relay-prompt-grid .components-base-control{margin-bottom:0}
+        .chuyi-ai-relay-prompt-grid textarea{font-family:Consolas,Monaco,monospace;line-height:1.55}
         .chuyi-ai-relay-relay-card__head code{background:#f6f7f7;color:#646970;display:inline-block;font-size:12px;margin-top:4px;max-width:100%;word-break:break-all}
         .chuyi-ai-relay-relay-card__meta{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:14px}
         .chuyi-ai-relay-relay-card__meta div{background:#fff;border:1px solid #e0e0e0;border-radius:2px;padding:10px 12px}

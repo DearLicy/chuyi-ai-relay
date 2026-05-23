@@ -5,7 +5,9 @@
  * Description: 为 WordPress AI Client 增加多中转、多协议模型池，支持 OpenAI-compatible 与 Anthropic Messages 接入。
  * Requires at least: 6.9
  * Requires PHP: 7.4
- * Version: 1.0.1
+ * Version: 1.0.2
+ * License: GPL-3.0-or-later
+ * License URI: https://www.gnu.org/licenses/gpl-3.0.html
  * Author: 李初一
  * Author URI: https://github.com/DearLicy
  */
@@ -15,7 +17,9 @@ declare(strict_types=1);
 namespace WordPress\ChuyiAiRelay;
 
 use WordPress\AiClient\AiClient;
+use WordPress\ChuyiAiRelay\Abilities\Registry as AbilitiesRegistry;
 use WordPress\ChuyiAiRelay\Admin\ConnectorAds;
+use WordPress\ChuyiAiRelay\Prompts\PromptOverrides;
 use WordPress\ChuyiAiRelay\Provider\ChuyiRelayProvider;
 use WordPress\ChuyiAiRelay\Update\GitHubReleaseUpdater;
 
@@ -26,13 +30,15 @@ if (!defined('ABSPATH')) {
 define('CHUYI_AI_RELAY_FILE', __FILE__);
 define('CHUYI_AI_RELAY_DIR', plugin_dir_path(__FILE__));
 define('CHUYI_AI_RELAY_URL', plugin_dir_url(__FILE__));
-define('CHUYI_AI_RELAY_VERSION', '1.0.1');
+define('CHUYI_AI_RELAY_VERSION', '1.0.2');
 
 require_once __DIR__ . '/src/autoload.php';
 require_once __DIR__ . '/src/Admin/SettingsPage.php';
 require_once __DIR__ . '/src/Language/I18n.php';
 
 GitHubReleaseUpdater::init();
+PromptOverrides::init();
+AbilitiesRegistry::init();
 
 function register_provider(): void
 {

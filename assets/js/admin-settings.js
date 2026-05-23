@@ -8,6 +8,7 @@
     }
 
     const { createElement: h, useEffect, useMemo, useState } = wp.element;
+    const __ = wp.i18n && wp.i18n.__ ? wp.i18n.__ : function (text) { return text; };
     const {
         Button,
         Card,
@@ -36,8 +37,27 @@
         settings: '接入设置',
         relays: '中转管理',
         test: '模型测试',
+        prompts: '提示词管理',
         help: '使用说明',
     };
+
+    function clonePrompts(prompts) {
+        return (Array.isArray(prompts) ? prompts : []).map(function (prompt) {
+            return Object.assign({}, prompt);
+        });
+    }
+
+    function promptFormsFromItems(items) {
+        const forms = {};
+        (Array.isArray(items) ? items : []).forEach(function (prompt) {
+            forms[prompt.ability] = {
+                enabled: !!prompt.enabled,
+                mode: prompt.mode || 'replace',
+                instruction: prompt.instruction || prompt.default_instruction || '',
+            };
+        });
+        return forms;
+    }
 
     function route(path, options) {
         return wp.apiFetch(Object.assign({ url: restBase + path }, options || {}));
@@ -66,6 +86,7 @@
             name: '初一 AI 中转',
             site_url: '',
             mode: 'openai',
+            image_endpoint: 'image',
             models: [],
         };
     }
@@ -156,11 +177,14 @@
         const [currentPage, setCurrentPage] = useState(initialPage);
         const [saving, setSaving] = useState(false);
         const [busy, setBusy] = useState('');
-        const [payload, setPayload] = useState({ relays: [], stats: {}, modes: [], capabilities: [] });
+        const [payload, setPayload] = useState({ relays: [], stats: {}, modes: [], imageEndpoints: [], capabilities: [] });
         const [relays, setRelays] = useState([]);
         const [notice, setNotice] = useState(null);
         const [testState, setTestState] = useState({ slotId: '', type: 'text', model: '', prompt: '' });
         const [testResult, setTestResult] = useState('等待测试。');
+        const [prompts, setPrompts] = useState([]);
+        const [promptForms, setPromptForms] = useState({});
+        const [promptsLoaded, setPromptsLoaded] = useState(false);
 
         function hydrate(data, options) {
             const nextRelays = cloneRelays(data.relays);
@@ -194,24 +218,131 @@
                 });
         }
 
+        function loadPrompts(options) {
+            const force = options && options.force;
+            if (promptsLoaded && !force) {
+                return Promise.resolve(prompts);
+            }
+            setBusy('prompts:load');
+            return route('/prompts')
+                .then(function (data) {
+                    const items = clonePrompts(data.prompts);
+                    setPrompts(items);
+                    setPromptForms(promptFormsFromItems(items));
+                    setPromptsLoaded(true);
+                    return items;
+                })
+                .catch(function (error) {
+                    setNotice({ status: 'error', message: error.message || '提示词加载失败。' });
+                })
+                .finally(function () {
+                    setBusy(function (current) { return current === 'prompts:load' ? '' : current; });
+                });
+        }
+
+        function hydratePrompts(data) {
+            const items = clonePrompts(data.prompts);
+            setPrompts(items);
+            setPromptForms(promptFormsFromItems(items));
+            setPromptsLoaded(true);
+            setNotice(data.notice || null);
+        }
+
+        function updatePromptForm(ability, patch) {
+            setPromptForms(function (items) {
+                return Object.assign({}, items, {
+                    [ability]: Object.assign({}, items[ability] || {}, patch),
+                });
+            });
+        }
+
+        function savePrompt(ability) {
+            const form = promptForms[ability] || {};
+            const instruction = String(form.instruction || '').trim();
+            if (!instruction) {
+                setNotice({ status: 'error', message: '提示词不能为空。' });
+                return Promise.resolve();
+            }
+            setBusy('prompt:save:' + ability);
+            return route('/prompts/' + ability, {
+                method: 'POST',
+                data: {
+                    enabled: !!form.enabled,
+                    mode: form.mode || 'replace',
+                    instruction: instruction,
+                },
+            })
+                .then(hydratePrompts)
+                .catch(function (error) {
+                    setNotice({ status: 'error', message: error.message || '提示词保存失败。' });
+                })
+                .finally(function () {
+                    setBusy('');
+                });
+        }
+
+        function resetPrompt(ability) {
+            setBusy('prompt:reset:' + ability);
+            return route('/prompts/' + ability, { method: 'DELETE' })
+                .then(hydratePrompts)
+                .catch(function (error) {
+                    setNotice({ status: 'error', message: error.message || '恢复默认失败。' });
+                })
+                .finally(function () {
+                    setBusy('');
+                });
+        }
+
         useEffect(function () {
             load();
         }, []);
 
         useEffect(function () {
+            if (currentPage === 'prompts') {
+                loadPrompts({ force: !promptsLoaded });
+            }
+        }, [currentPage]);
+
+        useEffect(function () {
+            function pageFromUrl(value) {
+                try {
+                    const url = new URL(value, window.location.href);
+                    const pageParam = url.searchParams.get('page');
+                    return pageParam === 'chuyi-ai-relay-settings'
+                        ? 'settings'
+                        : (pageParam === 'chuyi-ai-relay-relays' ? 'relays' : (pageParam === 'chuyi-ai-relay-test' ? 'test' : (pageParam === 'chuyi-ai-relay-prompts' ? 'prompts' : (pageParam === 'chuyi-ai-relay-help' ? 'help' : ''))));
+                } catch (error) {
+                    return '';
+                }
+            }
+
             function handlePopState() {
-                const url = new URL(window.location.href);
-                const pageParam = url.searchParams.get('page');
-                const nextPage = pageParam === 'chuyi-ai-relay-settings'
-                    ? 'settings'
-                    : (pageParam === 'chuyi-ai-relay-relays' ? 'relays' : (pageParam === 'chuyi-ai-relay-test' ? 'test' : 'help'));
+                const nextPage = pageFromUrl(window.location.href) || 'help';
                 setCurrentPage(nextPage);
                 load({ resetPageState: true });
             }
 
+            function handleAdminMenuClick(event) {
+                if (event.defaultPrevented) {
+                    return;
+                }
+                const link = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+                if (!link) {
+                    return;
+                }
+                const nextPage = pageFromUrl(link.href);
+                if (!nextPage) {
+                    return;
+                }
+                event.preventDefault();
+                switchPage(nextPage, link.href);
+            }
+
             window.addEventListener('popstate', handlePopState);
+            document.addEventListener('click', handleAdminMenuClick);
             return function () {
                 window.removeEventListener('popstate', handlePopState);
+                document.removeEventListener('click', handleAdminMenuClick);
             };
         }, []);
 
@@ -430,12 +561,13 @@
         function renderHeader() {
             const description = currentPage === 'settings'
                 ? '添加和编辑中转站，保存后会同步为 Connector provider。'
-                : (currentPage === 'relays' ? '查看运行中的中转接入，快速测速、拉取模型或清理配置。' : (currentPage === 'test' ? '选择已启用的中转站和模型，直接验证文本或生图链路。' : '了解插件能力、配置流程、审批放行和打赏支持。'));
+                : (currentPage === 'relays' ? '查看运行中的中转接入，快速测速、拉取模型或清理配置。' : (currentPage === 'test' ? '选择已启用的中转站和模型，直接验证文本或生图链路。' : (currentPage === 'prompts' ? '查看和覆盖官方 AI 能力的默认系统提示词。' : '了解插件能力、配置流程、审批放行和打赏支持。')));
             const navItems = [
                 { key: 'help', label: '使用说明', href: pages.help },
                 { key: 'settings', label: '接入设置', href: pages.settings },
                 { key: 'relays', label: '中转管理', href: pages.relays },
                 { key: 'test', label: '模型测试', href: pages.test },
+                { key: 'prompts', label: '提示词管理', href: pages.prompts },
             ];
 
             return h('div', { className: 'chuyi-ai-relay-page-head' },
@@ -455,7 +587,7 @@
                         href: item.href,
                         className: currentPage === item.key ? 'is-active' : '',
                         onClick: function (event) {
-            event.preventDefault();
+                            event.preventDefault();
                             switchPage(item.key, item.href);
                         },
                     }, item.label);
@@ -491,6 +623,7 @@
                         index: index,
                         modes: payload.modes || [],
                         capabilities: payload.capabilities || [],
+                        imageEndpoints: payload.imageEndpoints || [],
                         busy: busy,
                         updateRelay: updateRelay,
                         removeRelay: removeRelay,
@@ -594,6 +727,86 @@
             );
         }
 
+        function renderPromptsPage() {
+            const isLoadingPrompts = busy === 'prompts:load' && !promptsLoaded;
+
+            if (isLoadingPrompts) {
+                return h('section', { className: 'chuyi-ai-relay-section' },
+                    h('div', { className: 'chuyi-ai-relay-loading' },
+                        h(Spinner, null),
+                        h('span', null, __('正在加载提示词...', 'chuyi-ai-relay'))
+                    )
+                );
+            }
+
+            return h('section', { className: 'chuyi-ai-relay-section chuyi-ai-relay-prompts' },
+                h('div', { className: 'chuyi-ai-relay-section__head' },
+                    h('div', null,
+                        h('h2', null, __('提示词覆盖配置', 'chuyi-ai-relay')),
+                        h('p', null, __('默认显示内置提示词。未启用覆盖时保持默认；启用覆盖后使用保存内容。', 'chuyi-ai-relay'))
+                    ),
+                    h('div', { className: 'chuyi-ai-relay-actions' },
+                        h(Button, { variant: 'secondary', isBusy: busy === 'prompts:load', disabled: busy === 'prompts:load', onClick: function () { loadPrompts({ force: true }); } }, __('刷新提示词', 'chuyi-ai-relay'))
+                    )
+                ),
+                h('div', { className: 'chuyi-ai-relay-prompt-list' }, prompts.length ? prompts.map(function (prompt) {
+                    const ability = prompt.ability || '';
+                    const form = promptForms[ability] || {
+                        enabled: !!prompt.enabled,
+                        mode: prompt.mode || 'replace',
+                        instruction: prompt.instruction || prompt.default_instruction || '',
+                    };
+                    const isSavingPrompt = busy === 'prompt:save:' + ability;
+                    const isResettingPrompt = busy === 'prompt:reset:' + ability;
+                    return h(Card, { key: ability, className: 'chuyi-ai-relay-prompt-card' },
+                        h(CardBody, null,
+                            h('div', { className: 'chuyi-ai-relay-prompt-card__head' },
+                                h('div', null,
+                                    h('h3', null, prompt.label || ability),
+                                    h('code', null, ability)
+                                ),
+                                h('span', { className: form.enabled ? 'chuyi-ai-relay-status is-enabled' : 'chuyi-ai-relay-status' }, form.enabled ? __('已启用覆盖', 'chuyi-ai-relay') : __('使用默认提示词', 'chuyi-ai-relay'))
+                            ),
+                            prompt.description && h('p', { className: 'chuyi-ai-relay-card__muted' }, prompt.description),
+                            h('div', { className: 'chuyi-ai-relay-form-grid chuyi-ai-relay-prompt-grid' },
+                                h(ToggleControl, {
+                                    label: __('启用覆盖', 'chuyi-ai-relay'),
+                                    checked: !!form.enabled,
+                                    onChange: function (enabled) { updatePromptForm(ability, { enabled: enabled }); },
+                                }),
+                                h(SelectControl, {
+                                    label: __('覆盖模式', 'chuyi-ai-relay'),
+                                    value: form.mode || 'replace',
+                                    options: [
+                                        { label: __('替换默认提示词', 'chuyi-ai-relay'), value: 'replace' },
+                                        { label: __('追加到默认提示词', 'chuyi-ai-relay'), value: 'append' },
+                                    ],
+                                    onChange: function (mode) { updatePromptForm(ability, { mode: mode }); },
+                                }),
+                                h('div', { className: 'chuyi-ai-relay-field chuyi-ai-relay-field--full' },
+                                    h(TextareaControl, {
+                                        label: __('提示词内容', 'chuyi-ai-relay'),
+                                        rows: 12,
+                                        value: form.instruction || '',
+                                        onChange: function (instruction) { updatePromptForm(ability, { instruction: instruction }); },
+                                    }),
+                                    h('p', { className: 'chuyi-ai-relay-card__muted' }, __('保存时提示词不能为空。恢复默认会删除自定义覆盖，并回到内置默认提示词。', 'chuyi-ai-relay'))
+                                )
+                            ),
+                            h('div', { className: 'chuyi-ai-relay-actions chuyi-ai-relay-actions--end' },
+                                h(Button, { variant: 'secondary', isBusy: isResettingPrompt, disabled: isSavingPrompt || isResettingPrompt || !prompt.customized, onClick: function () { resetPrompt(ability); } }, __('恢复默认', 'chuyi-ai-relay')),
+                                h(Button, { variant: 'primary', isBusy: isSavingPrompt, disabled: isSavingPrompt || isResettingPrompt, onClick: function () { savePrompt(ability); } }, __('保存提示词', 'chuyi-ai-relay'))
+                            )
+                        )
+                    );
+                }) : h(EmptyState, {
+                    title: __('还没有可管理的提示词', 'chuyi-ai-relay'),
+                    description: __('当前没有读取到可覆盖的默认提示词。', 'chuyi-ai-relay'),
+                    action: h(Button, { variant: 'primary', onClick: function () { loadPrompts({ force: true }); } }, __('重新加载', 'chuyi-ai-relay')),
+                }))
+            );
+        }
+
         function renderHelpPage() {
             const approvalUrl = pages.connectors || 'options-connectors.php';
             const wallet = 'TKu7SNWrmi3n1n6e8FJDgPAwe8oGrxXHvP';
@@ -673,6 +886,7 @@
             currentPage === 'settings' && renderSettingsPage(),
             currentPage === 'relays' && renderRelaysPage(),
             currentPage === 'test' && renderTestPage(),
+            currentPage === 'prompts' && renderPromptsPage(),
             currentPage === 'help' && renderHelpPage()
         );
     }
@@ -801,6 +1015,17 @@
                         value: relay.mode || 'openai',
                         options: props.modes.length ? props.modes : [{ label: 'OpenAI Compatible', value: 'openai' }, { label: 'Anthropic Messages', value: 'anthropic' }],
                         onChange: function (mode) { props.updateRelay(props.index, { mode: mode }); },
+                    }),
+                    h(SelectControl, {
+                        label: '生图接口',
+                        help: '每个中转站返回数据不一样，请自行选择合适的生图接口。WordPress 生图需要接口返回 base64 图片才能使用。',
+                        value: relay.image_endpoint || 'image',
+                        options: props.imageEndpoints && props.imageEndpoints.length ? props.imageEndpoints : [
+                            { label: '图片接口 /v1/images/generations', value: 'image' },
+                            { label: '对话接口 /v1/chat/completions', value: 'chat' },
+                            { label: '自动尝试：先图片接口，再对话接口', value: 'auto' },
+                        ],
+                        onChange: function (image_endpoint) { props.updateRelay(props.index, { image_endpoint: image_endpoint }); },
                     }),
                     h('div', { className: 'chuyi-ai-relay-field chuyi-ai-relay-field--full' },
                         h(Flex, { align: 'center', justify: 'space-between' },
