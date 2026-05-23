@@ -117,20 +117,18 @@ final class GitHubReleaseUpdater
         }
 
         $source = untrailingslashit($source);
-        if (basename($source) === self::slug()) {
+        $sourcePluginFile = $source . '/plugin.php';
+        if (is_file($sourcePluginFile) && self::looksLikePluginFile($sourcePluginFile)) {
             return $source;
         }
 
-        $target = trailingslashit(dirname($source)) . self::slug();
-        if (is_dir($target)) {
-            return $source;
+        $nestedSource = $source . '/' . self::slug();
+        $nestedPluginFile = $nestedSource . '/plugin.php';
+        if (is_dir($nestedSource) && is_file($nestedPluginFile) && self::looksLikePluginFile($nestedPluginFile)) {
+            return $nestedSource;
         }
 
-        if (!rename($source, $target)) {
-            return $source;
-        }
-
-        return $target;
+        return $source;
     }
 
     /**
@@ -341,6 +339,15 @@ final class GitHubReleaseUpdater
         }
 
         return nl2br(esc_html($body));
+    }
+
+    /**
+     * Checks whether a PHP file contains a WordPress plugin header.
+     */
+    private static function looksLikePluginFile(string $path): bool
+    {
+        $header = file_get_contents($path, false, null, 0, 8192);
+        return is_string($header) && stripos($header, 'Plugin Name:') !== false;
     }
 
     /**
