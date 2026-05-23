@@ -40,14 +40,14 @@ function chuyi_ai_relay_add_plugin_action_links(array $links): array
         'chuyi_ai_relay_check_update'
     );
 
-    array_unshift(
-        $links,
+        array_unshift(
+            $links,
         '<a href="' . esc_url(admin_url('admin.php?page=' . CHUYI_AI_RELAY_HELP_SLUG)) . '">' . esc_html__('插件设置', 'chuyi-ai-relay') . '</a>',
         '<a href="' . esc_url($checkUpdateUrl) . '">' . esc_html__('检查更新', 'chuyi-ai-relay') . '</a>'
-    );
+        );
 
-    return $links;
-}
+        return $links;
+    }
 
 function chuyi_ai_relay_register_menu(): void
 {
@@ -148,7 +148,7 @@ function chuyi_ai_relay_enqueue_assets(string $hookSuffix): void
     wp_localize_script(
         'chuyi-ai-relay-admin-settings',
         'chuyiAiRelayAdmin',
-        array(
+                array(
             'restUrl' => esc_url_raw(rest_url(CHUYI_AI_RELAY_REST_NAMESPACE)),
             'nonce'   => wp_create_nonce('wp_rest'),
             'pages'   => array(
@@ -186,7 +186,7 @@ function chuyi_ai_relay_handle_check_update(): void
     $status = $update !== null ? 'available' : 'latest';
 
     wp_safe_redirect(add_query_arg(
-        array(
+            array(
             'page' => CHUYI_AI_RELAY_HELP_SLUG,
             'chuyi_ai_relay_update_checked' => $status,
         ),
@@ -269,7 +269,7 @@ function chuyi_ai_relay_register_rest_routes(): void
     register_rest_route(
         CHUYI_AI_RELAY_REST_NAMESPACE,
         '/settings',
-        array(
+            array(
             array(
                 'methods'             => 'GET',
                 'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_get_settings',
@@ -279,9 +279,9 @@ function chuyi_ai_relay_register_rest_routes(): void
                 'methods'             => 'POST',
                 'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_save_settings',
                 'permission_callback' => $permission,
-            ),
-        )
-    );
+                ),
+            )
+        );
 
     register_rest_route(CHUYI_AI_RELAY_REST_NAMESPACE, '/fetch-models', array(
         'methods'             => 'POST',
@@ -434,34 +434,34 @@ function chuyi_ai_relay_fetch_models_from_relay(string $slotId): array
     $baseUrl = Settings::getBaseUrl($slotId);
     $apiKey = Settings::getApiKey($slotId);
 
-    if ($baseUrl === '') {
+        if ($baseUrl === '') {
         return array('ok' => false, 'message' => '请先保存中转站地址。', 'models' => array());
-    }
-    if ($apiKey === '') {
+        }
+        if ($apiKey === '') {
         return array('ok' => false, 'message' => '请先在 Connectors 中保存此 provider 的 API Key。', 'models' => array());
-    }
+        }
 
     $response = wp_remote_get(Settings::urlForSlot($slotId, 'models'), array(
-        'timeout' => 30,
+                'timeout' => 30,
         'headers' => chuyi_ai_relay_get_request_headers($slotId, $apiKey),
     ));
 
-    if (is_wp_error($response)) {
-        return array('ok' => false, 'message' => $response->get_error_message(), 'models' => array());
-    }
+        if (is_wp_error($response)) {
+            return array('ok' => false, 'message' => $response->get_error_message(), 'models' => array());
+        }
 
-    $statusCode = (int) wp_remote_retrieve_response_code($response);
-    $body = (string) wp_remote_retrieve_body($response);
-    if ($statusCode < 200 || $statusCode >= 300) {
+        $statusCode = (int) wp_remote_retrieve_response_code($response);
+        $body = (string) wp_remote_retrieve_body($response);
+        if ($statusCode < 200 || $statusCode >= 300) {
         return array('ok' => false, 'message' => 'HTTP ' . $statusCode . '：' . wp_strip_all_tags($body), 'models' => array());
-    }
+        }
 
-    $data = json_decode($body, true);
+        $data = json_decode($body, true);
     $models = is_array($data) && isset($data['data']) && is_array($data['data'])
         ? chuyi_ai_relay_normalize_models_from_response($data['data'])
         : array();
 
-    if (empty($models)) {
+        if (empty($models)) {
         return array('ok' => false, 'message' => '接口没有返回可用模型。', 'models' => array());
     }
 
@@ -506,7 +506,7 @@ function chuyi_ai_relay_request_generation(string $slotId, string $model, string
     if ($model === '') {
         return array('ok' => false, 'message' => '请选择模型。');
     }
-    if ($apiKey === '') {
+        if ($apiKey === '') {
         return array('ok' => false, 'message' => '请先在 Connectors 中保存此 provider 的 API Key。');
     }
 
@@ -637,13 +637,13 @@ function chuyi_ai_relay_normalize_models_from_response(array $items): array
 
     foreach ($items as $item) {
         if (!is_array($item) || empty($item['id']) || !is_string($item['id'])) {
-            continue;
-        }
+                continue;
+            }
 
         $id = sanitize_text_field($item['id']);
         if ($id === '' || isset($seen[$id])) {
-            continue;
-        }
+                continue;
+            }
 
         $name = isset($item['name']) && is_string($item['name']) && $item['name'] !== ''
             ? sanitize_text_field($item['name'])
@@ -667,8 +667,8 @@ function chuyi_ai_relay_extract_image_generation_message(string $body): string
 {
     $data = json_decode($body, true);
     if (!is_array($data)) {
-        return '';
-    }
+            return '';
+        }
 
     $items = isset($data['data']) && is_array($data['data']) ? $data['data'] : array();
     $lines = array();

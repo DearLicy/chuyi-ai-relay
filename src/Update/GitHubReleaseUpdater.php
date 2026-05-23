@@ -30,8 +30,6 @@ final class GitHubReleaseUpdater
     {
         add_filter('pre_set_site_transient_update_plugins', array(__CLASS__, 'filterUpdateTransient'));
         add_filter('plugins_api', array(__CLASS__, 'filterPluginInfo'), 10, 3);
-        add_filter('upgrader_source_selection', array(__CLASS__, 'normalizeUpgradeSource'), 10, 4);
-        add_filter('upgrader_post_install', array(__CLASS__, 'normalizeInstalledDirectory'), 10, 3);
     }
 
     /**
@@ -92,83 +90,6 @@ final class GitHubReleaseUpdater
         );
 
         return $info;
-    }
-
-    /**
-     * Keeps GitHub zipball extraction under the stable plugin directory before installation.
-     *
-     * @param string|\WP_Error $source Extracted source directory.
-     * @param string           $remoteSource Remote source path.
-     * @param mixed            $upgrader WordPress upgrader instance.
-     * @param array<mixed>     $hookExtra Upgrader hook metadata.
-     * @return string|\WP_Error
-     */
-    public static function normalizeUpgradeSource($source, string $remoteSource, $upgrader, array $hookExtra)
-    {
-        unset($remoteSource, $upgrader);
-
-        if (is_wp_error($source) || !is_string($source) || !is_dir($source)) {
-            return $source;
-        }
-
-        $pluginFile = plugin_basename(\CHUYI_AI_RELAY_FILE);
-        if (($hookExtra['plugin'] ?? '') !== $pluginFile) {
-            return $source;
-        }
-
-        $source = untrailingslashit($source);
-        $sourcePluginFile = $source . '/plugin.php';
-        if (is_file($sourcePluginFile) && self::looksLikePluginFile($sourcePluginFile)) {
-            return $source;
-        }
-
-        $nestedSource = $source . '/' . self::slug();
-        $nestedPluginFile = $nestedSource . '/plugin.php';
-        if (is_dir($nestedSource) && is_file($nestedPluginFile) && self::looksLikePluginFile($nestedPluginFile)) {
-            return $nestedSource;
-        }
-
-        return $source;
-    }
-
-    /**
-     * Keeps GitHub zipball installs under the stable plugin directory.
-     *
-     * @param mixed $result Install result.
-     * @param mixed $hookExtra Upgrader hook metadata.
-     * @param mixed $upgrader WordPress upgrader instance.
-     * @return mixed
-     */
-    public static function normalizeInstalledDirectory($result, $hookExtra, $upgrader)
-    {
-        unset($upgrader);
-
-        if (!is_array($result) || !is_array($hookExtra)) {
-            return $result;
-        }
-
-        $pluginFile = plugin_basename(\CHUYI_AI_RELAY_FILE);
-        if (($hookExtra['plugin'] ?? '') !== $pluginFile || empty($result['destination']) || !is_string($result['destination'])) {
-            return $result;
-        }
-
-        $destination = untrailingslashit($result['destination']);
-        $target = WP_PLUGIN_DIR . '/' . self::slug();
-        if ($destination === $target || !is_dir($destination)) {
-            return $result;
-        }
-
-        if (is_dir($target)) {
-            return $result;
-        }
-
-        if (!rename($destination, $target)) {
-            return $result;
-        }
-
-        $result['destination'] = $target;
-        $result['destination_name'] = self::slug();
-        return $result;
     }
 
     /**
@@ -339,15 +260,6 @@ final class GitHubReleaseUpdater
         }
 
         return nl2br(esc_html($body));
-    }
-
-    /**
-     * Checks whether a PHP file contains a WordPress plugin header.
-     */
-    private static function looksLikePluginFile(string $path): bool
-    {
-        $header = file_get_contents($path, false, null, 0, 8192);
-        return is_string($header) && stripos($header, 'Plugin Name:') !== false;
     }
 
     /**
