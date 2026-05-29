@@ -12,6 +12,7 @@ namespace WordPress\ChuyiAiRelay\Models;
 use WordPress\AiClient\Providers\Http\Contracts\RequestAuthenticationInterface;
 use WordPress\AiClient\Providers\Http\DTO\ApiKeyRequestAuthentication;
 use WordPress\AiClient\Providers\Http\DTO\Request;
+use WordPress\AiClient\Providers\Http\DTO\RequestOptions;
 use WordPress\AiClient\Providers\Http\DTO\Response;
 use WordPress\AiClient\Providers\Http\Enums\HttpMethodEnum;
 use WordPress\AiClient\Providers\OpenAiCompatibleImplementation\AbstractOpenAiCompatibleTextGenerationModel;
@@ -30,6 +31,7 @@ final class ChuyiRelayTextGenerationModel extends AbstractOpenAiCompatibleTextGe
     protected function prepareGenerateTextParams(array $prompt): array
     {
         $params = parent::prepareGenerateTextParams($prompt);
+        $params = $this->applyGlobalGenerationOptions($params);
 
         if ($this->isAnthropicMode()) {
             $topK = $this->getConfig()->getTopK();
@@ -39,6 +41,50 @@ final class ChuyiRelayTextGenerationModel extends AbstractOpenAiCompatibleTextGe
         }
 
         return $params;
+    }
+
+    /**
+     * Applies plugin-wide defaults without touching official AI plugin code.
+     *
+     * @param array<string,mixed> $params OpenAI-compatible params.
+     * @return array<string,mixed>
+     */
+    private function applyGlobalGenerationOptions(array $params): array
+    {
+        $maxOutputTokens = Settings::getMaxOutputTokens();
+        if ($maxOutputTokens > 0) {
+            $params['max_tokens'] = $maxOutputTokens;
+        }
+
+        $contextMaxTokens = Settings::getContextMaxTokens();
+        if ($contextMaxTokens > 0) {
+            $params['metadata'] = isset($params['metadata']) && is_array($params['metadata']) ? $params['metadata'] : array();
+            $params['metadata']['chuyi_context_max_tokens'] = $contextMaxTokens;
+        }
+
+        $thinkingDepth = Settings::getThinkingDepth();
+        if ($thinkingDepth !== Settings::THINKING_DEPTH_OFF) {
+            $params['reasoning_effort'] = $thinkingDepth;
+            $params['metadata'] = isset($params['metadata']) && is_array($params['metadata']) ? $params['metadata'] : array();
+            $params['metadata']['chuyi_thinking_depth'] = $thinkingDepth;
+        }
+
+        return $params;
+    }
+
+    /**
+     * Maps a human setting to a conservative token budget for providers that support thinking.
+     */
+    private function getThinkingBudget(string $thinkingDepth): int
+    {
+        if ($thinkingDepth === Settings::THINKING_DEPTH_HIGH) {
+            return 4096;
+        }
+        if ($thinkingDepth === Settings::THINKING_DEPTH_MEDIUM) {
+            return 2048;
+        }
+
+        return 1024;
     }
 
     /**
@@ -67,22 +113,60 @@ final class ChuyiRelayTextGenerationModel extends AbstractOpenAiCompatibleTextGe
                 $headers['anthropic-beta'] = 'structured-outputs-2025-11-13';
             }
 
+            $url = Settings::urlForProviderId($this->providerMetadata()->getId(), 'messages');
+            $this->logRelayTextRequest($url, 'messages');
+
             return new Request(
                 $method,
-                Settings::urlForProviderId($this->providerMetadata()->getId(), 'messages'),
+                $url,
                 $headers,
                 $anthropicData,
-                $this->getRequestOptions()
+                $this->getRelayRequestOptions()
             );
         }
 
+        $url = Settings::urlForProviderId($this->providerMetadata()->getId(), $path);
+        $this->logRelayTextRequest($url, $path);
+
         return new Request(
             $method,
-            Settings::urlForProviderId($this->providerMetadata()->getId(), $path),
+            $url,
             $headers,
             $data,
-            $this->getRequestOptions()
+            $this->getRelayRequestOptions()
         );
+    }
+
+    /**
+     * Records the final relay text request target without exposing secrets.
+     */
+    private function logRelayTextRequest(string $url, string $path): void
+    {
+        $providerId = $this->providerMetadata()->getId();
+        $slotId = Settings::getSlotIdForProviderId($providerId);
+        $message = sprintf(
+            '[chuyi-ai-relay] text request target provider=%s slot=%s model=%s base_url=%s endpoint=%s timeout=%s',
+            $providerId,
+            $slotId,
+            $this->metadata()->getId(),
+            Settings::getBaseUrl($slotId),
+            $url,
+            (string) Settings::getImageGenerationTimeout()
+        );
+
+        error_log($message);
+    }
+
+    /**
+     * Keeps relay text requests from being cut off by the default WordPress HTTP timeout.
+     */
+    private function getRelayRequestOptions(): RequestOptions
+    {
+        $options = $this->getRequestOptions();
+        $options = $options instanceof RequestOptions ? clone $options : new RequestOptions();
+        $options->setTimeout((float) Settings::getImageGenerationTimeout());
+
+        return $options;
     }
 
     /**
@@ -91,10 +175,120 @@ final class ChuyiRelayTextGenerationModel extends AbstractOpenAiCompatibleTextGe
     protected function parseResponseToGenerativeAiResult(Response $response): GenerativeAiResult
     {
         if (!$this->isAnthropicMode()) {
-            return parent::parseResponseToGenerativeAiResult($this->normalizeStructuredJsonResponse($response));
+            return parent::parseResponseToGenerativeAiResult($this->normalizeStructuredJsonResponse($this->normalizeOpenAiTextResponse($response)));
         }
 
         return parent::parseResponseToGenerativeAiResult($this->normalizeStructuredJsonResponse($this->convertAnthropicResponse($response)));
+    }
+
+    /**
+     * Converts common non-standard text response envelopes to OpenAI-compatible choices.
+     */
+    private function normalizeOpenAiTextResponse(Response $response): Response
+    {
+        $responseData = $response->getData();
+        if (!is_array($responseData)) {
+            return $response;
+        }
+
+        if (!empty($responseData['choices']) && is_array($responseData['choices'])) {
+            return $response;
+        }
+
+        $content = $this->extractTextFromResponseData($responseData);
+        if ($content === '') {
+            return $response;
+        }
+
+        $responseData['id'] = isset($responseData['id']) && is_string($responseData['id']) ? $responseData['id'] : 'chuyi-relay-' . md5($content);
+        $responseData['choices'] = array(array(
+            'message'       => array(
+                'role'    => 'assistant',
+                'content' => $content,
+            ),
+            'finish_reason' => 'stop',
+        ));
+
+        $body = wp_json_encode($responseData);
+        if (!is_string($body)) {
+            return $response;
+        }
+
+        return new Response($response->getStatusCode(), $response->getHeaders(), $body);
+    }
+
+    /**
+     * Extracts a text answer from known relay response shapes.
+     *
+     * @param array<string,mixed> $responseData
+     */
+    private function extractTextFromResponseData(array $responseData): string
+    {
+        foreach (array('output_text', 'text', 'content', 'response', 'result', 'answer') as $key) {
+            if (isset($responseData[$key]) && is_string($responseData[$key]) && trim($responseData[$key]) !== '') {
+                return trim($responseData[$key]);
+            }
+        }
+
+        if (isset($responseData['message'])) {
+            if (is_string($responseData['message']) && trim($responseData['message']) !== '') {
+                return trim($responseData['message']);
+            }
+
+            if (is_array($responseData['message'])) {
+                $messageContent = $this->extractTextFromResponseData($responseData['message']);
+                if ($messageContent !== '') {
+                    return $messageContent;
+                }
+            }
+        }
+
+        if (isset($responseData['data'])) {
+            if (is_string($responseData['data']) && trim($responseData['data']) !== '') {
+                return trim($responseData['data']);
+            }
+
+            if (is_array($responseData['data'])) {
+                $dataContent = $this->extractTextFromNestedData($responseData['data']);
+                if ($dataContent !== '') {
+                    return $dataContent;
+                }
+            }
+        }
+
+        if (isset($responseData['output']) && is_array($responseData['output'])) {
+            $outputContent = $this->extractTextFromNestedData($responseData['output']);
+            if ($outputContent !== '') {
+                return $outputContent;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Extracts text from nested response lists or objects.
+     *
+     * @param array<mixed> $items
+     */
+    private function extractTextFromNestedData(array $items): string
+    {
+        foreach ($items as $item) {
+            if (is_string($item) && trim($item) !== '') {
+                return trim($item);
+            }
+
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $content = $this->extractTextFromResponseData($item);
+            if ($content !== '') {
+                return $content;
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -152,7 +346,7 @@ final class ChuyiRelayTextGenerationModel extends AbstractOpenAiCompatibleTextGe
             return $content;
         }
 
-        if (array_is_list($decoded) && (empty($decoded) || $this->looksLikeTaxonomySuggestions($decoded))) {
+        if ($this->isListArray($decoded) && (empty($decoded) || $this->looksLikeTaxonomySuggestions($decoded))) {
             $encoded = wp_json_encode(array('suggestions' => $decoded), JSON_UNESCAPED_UNICODE);
             return is_string($encoded) ? $encoded : $content;
         }
@@ -206,6 +400,20 @@ final class ChuyiRelayTextGenerationModel extends AbstractOpenAiCompatibleTextGe
         }
 
         return $end === false ? '' : trim(substr($candidate, 0, $end + 1));
+    }
+
+    /**
+     * Checks whether an array uses consecutive integer keys.
+     *
+     * @param array<mixed> $items Array to inspect.
+     */
+    private function isListArray(array $items): bool
+    {
+        if (empty($items)) {
+            return true;
+        }
+
+        return array_keys($items) === range(0, count($items) - 1);
     }
 
     /**
@@ -328,6 +536,17 @@ final class ChuyiRelayTextGenerationModel extends AbstractOpenAiCompatibleTextGe
         }
         if (isset($params['top_k'])) {
             $anthropic['top_k'] = $params['top_k'];
+        }
+        if (isset($params['metadata']) && is_array($params['metadata'])) {
+            $anthropic['metadata'] = $params['metadata'];
+        }
+        if (isset($params['reasoning_effort']) && is_string($params['reasoning_effort'])) {
+            $thinkingBudget = $this->getThinkingBudget($params['reasoning_effort']);
+            $anthropic['thinking'] = array(
+                'type'          => 'enabled',
+                'budget_tokens' => min($thinkingBudget, max(1024, $anthropic['max_tokens'] - 1)),
+            );
+            $anthropic['max_tokens'] = max($anthropic['max_tokens'], $anthropic['thinking']['budget_tokens'] + 1);
         }
 
         $customOptions = $this->getConfig()->getCustomOptions();

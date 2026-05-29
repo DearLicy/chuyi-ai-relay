@@ -1,14 +1,28 @@
 {
   "cards": [
     {
-      "title": "6i2 AI大模型",
-      "url": "https://6i2.pw/",
-      "icon": "https://6i2.pw/favicon.ico"
+      "id": "dreamax",
+      "title": "Dreamax - AI 图像创作平台",
+      "description": "开通 API 联系 QQ858642614",
+      "url": "https://gpt222.com/invite?code=5211",
+      "buttonText": "前往",
+      "iconUrl": "https://gpt222.com/favicon.ico"
     },
     {
-      "title": "悠米AI中转",
-      "url": "https://www.umapis.com/register?aff=l7Sp",
-      "icon": "https://www.umapis.com/favicon.ico"
+      "id": "6i2",
+      "title": "6i2",
+      "description": "10元一亿token",
+      "url": "https://6i2.pw/sign-up?aff=r1nA",
+      "buttonText": "前往",
+      "iconUrl": "https://6i2.pw/favicon.ico"
+    },
+    {
+      "id": "yunqiao-ai",
+      "title": "云桥AI",
+      "description": "作者自营",
+      "url": "https://www.akucb.com/sign-up?aff=xfy1",
+      "buttonText": "前往",
+      "iconUrl": "https://www.akucb.com/favicon.ico"
     }
   ]
 }

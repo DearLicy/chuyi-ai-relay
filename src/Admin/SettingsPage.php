@@ -19,6 +19,7 @@ if (!defined('ABSPATH')) {
 }
 
 const CHUYI_AI_RELAY_MENU_SLUG = 'chuyi-ai-relay';
+const CHUYI_AI_RELAY_PLUGIN_SLUG = 'chuyi-ai-relay-plugin';
 const CHUYI_AI_RELAY_SETTINGS_SLUG = 'chuyi-ai-relay-settings';
 const CHUYI_AI_RELAY_RELAYS_SLUG = 'chuyi-ai-relay-relays';
 const CHUYI_AI_RELAY_TEST_SLUG = 'chuyi-ai-relay-test';
@@ -46,7 +47,7 @@ function chuyi_ai_relay_add_plugin_action_links(array $links): array
 
         array_unshift(
             $links,
-        '<a href="' . esc_url(admin_url('admin.php?page=' . CHUYI_AI_RELAY_HELP_SLUG)) . '">' . esc_html__('插件设置', 'chuyi-ai-relay') . '</a>',
+        '<a href="' . esc_url(admin_url('admin.php?page=' . CHUYI_AI_RELAY_PLUGIN_SLUG)) . '">' . esc_html__('插件设置', 'chuyi-ai-relay') . '</a>',
         '<a href="' . esc_url($checkUpdateUrl) . '">' . esc_html__('检查更新', 'chuyi-ai-relay') . '</a>'
         );
 
@@ -72,6 +73,15 @@ function chuyi_ai_relay_register_menu(): void
         'manage_options',
         CHUYI_AI_RELAY_HELP_SLUG,
         __NAMESPACE__ . '\\chuyi_ai_relay_render_help_page'
+    );
+
+    add_submenu_page(
+        CHUYI_AI_RELAY_HELP_SLUG,
+        '初一 AI 中转 · 插件设置',
+        '插件设置',
+        'manage_options',
+        CHUYI_AI_RELAY_PLUGIN_SLUG,
+        __NAMESPACE__ . '\\chuyi_ai_relay_render_plugin_page'
     );
 
     add_submenu_page(
@@ -109,6 +119,11 @@ function chuyi_ai_relay_register_menu(): void
         CHUYI_AI_RELAY_PROMPTS_SLUG,
         __NAMESPACE__ . '\\chuyi_ai_relay_render_prompts_page'
     );
+}
+
+function chuyi_ai_relay_render_plugin_page(): void
+{
+    chuyi_ai_relay_render_app_mount('plugin', '插件设置');
 }
 
 function chuyi_ai_relay_render_settings_page(): void
@@ -170,11 +185,12 @@ function chuyi_ai_relay_enqueue_assets(string $hookSuffix): void
             'restUrl' => esc_url_raw(rest_url(CHUYI_AI_RELAY_REST_NAMESPACE)),
             'nonce'   => wp_create_nonce('wp_rest'),
             'pages'   => array(
-                'settings'  => admin_url('admin.php?page=' . CHUYI_AI_RELAY_SETTINGS_SLUG),
-                'relays'    => admin_url('admin.php?page=' . CHUYI_AI_RELAY_RELAYS_SLUG),
-                'test'      => admin_url('admin.php?page=' . CHUYI_AI_RELAY_TEST_SLUG),
-                'prompts'   => admin_url('admin.php?page=' . CHUYI_AI_RELAY_PROMPTS_SLUG),
-                'help'      => admin_url('admin.php?page=' . CHUYI_AI_RELAY_HELP_SLUG),
+                'plugin'   => admin_url('admin.php?page=' . CHUYI_AI_RELAY_PLUGIN_SLUG),
+                'settings' => admin_url('admin.php?page=' . CHUYI_AI_RELAY_SETTINGS_SLUG),
+                'relays'   => admin_url('admin.php?page=' . CHUYI_AI_RELAY_RELAYS_SLUG),
+                'test'     => admin_url('admin.php?page=' . CHUYI_AI_RELAY_TEST_SLUG),
+                'prompts'  => admin_url('admin.php?page=' . CHUYI_AI_RELAY_PROMPTS_SLUG),
+                'help'     => admin_url('admin.php?page=' . CHUYI_AI_RELAY_HELP_SLUG),
                 'connectors' => admin_url('options-connectors.php'),
             ),
             'assets'  => array(
@@ -187,7 +203,8 @@ function chuyi_ai_relay_enqueue_assets(string $hookSuffix): void
 
 function chuyi_ai_relay_is_own_admin_screen(string $hookSuffix): bool
 {
-    return strpos($hookSuffix, CHUYI_AI_RELAY_SETTINGS_SLUG) !== false
+    return strpos($hookSuffix, CHUYI_AI_RELAY_PLUGIN_SLUG) !== false
+        || strpos($hookSuffix, CHUYI_AI_RELAY_SETTINGS_SLUG) !== false
         || strpos($hookSuffix, CHUYI_AI_RELAY_RELAYS_SLUG) !== false
         || strpos($hookSuffix, CHUYI_AI_RELAY_TEST_SLUG) !== false
         || strpos($hookSuffix, CHUYI_AI_RELAY_PROMPTS_SLUG) !== false
@@ -283,7 +300,7 @@ function chuyi_ai_relay_render_admin_notices(): void
         echo '<div class="notice notice-warning is-dismissible">';
         echo '<h2 style="color:#b26200;"><span class="dashicons dashicons-warning" style="vertical-align:middle;"></span> 请完成官方 AI 插件连接器审批</h2>';
         echo '<p>官方 AI 插件 <code>ai/ai.php</code> 需要在 Connector Approvals 中手动放行后，文章编辑页的 AI 功能才能调用初一 AI 中转。</p>';
-        echo '<p><a class="button button-primary" style="margin:2px;" href="' . esc_url(admin_url('options-connectors.php')) . '">打开连接器审批</a></p>';
+        echo '<p><a class="button button-primary" style="margin:2px;" href="' . esc_url(admin_url('tools.php?page=ai-connector-approval')) . '">打开连接器审批</a></p>';
         echo '</div>';
     }
 
@@ -351,6 +368,14 @@ function chuyi_ai_relay_register_rest_routes(): void
             )
         );
 
+    register_rest_route(CHUYI_AI_RELAY_REST_NAMESPACE, '/plugin-options', array(
+        array(
+            'methods'             => 'POST',
+            'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_save_plugin_options',
+            'permission_callback' => $permission,
+        ),
+    ));
+
     register_rest_route(CHUYI_AI_RELAY_REST_NAMESPACE, '/fetch-models', array(
         'methods'             => 'POST',
         'callback'            => __NAMESPACE__ . '\\chuyi_ai_relay_rest_fetch_models',
@@ -410,6 +435,21 @@ function chuyi_ai_relay_rest_save_settings(\WP_REST_Request $request): \WP_REST_
         'notice' => array(
             'status'  => 'success',
             'message' => '设置已保存。',
+        ),
+    )));
+}
+
+function chuyi_ai_relay_rest_save_plugin_options(\WP_REST_Request $request): \WP_REST_Response
+{
+    $params = $request->get_json_params();
+    $options = isset($params['options']) && is_array($params['options']) ? $params['options'] : array();
+
+    Settings::saveOptions($options);
+
+    return rest_ensure_response(chuyi_ai_relay_get_admin_payload(array(
+        'notice' => array(
+            'status'  => 'success',
+            'message' => '插件设置已保存。',
         ),
     )));
 }
@@ -548,6 +588,15 @@ function chuyi_ai_relay_get_admin_payload(array $extra = array()): array
 
     return array_merge(array(
         'relays' => $relays,
+        'options' => Settings::getOptions(),
+        'optionChoices' => array(
+            'thinkingDepths' => array(
+                array('label' => '关闭', 'value' => Settings::THINKING_DEPTH_OFF),
+                array('label' => '低', 'value' => Settings::THINKING_DEPTH_LOW),
+                array('label' => '中', 'value' => Settings::THINKING_DEPTH_MEDIUM),
+                array('label' => '高', 'value' => Settings::THINKING_DEPTH_HIGH),
+            ),
+        ),
         'stats'  => array(
             'totalRelays'   => count($relays),
             'enabledRelays' => $enabled,
@@ -694,7 +743,7 @@ function chuyi_ai_relay_request_image_generation(string $slotId, string $apiKey,
         'prompt' => $prompt,
     );
 
-    $result = chuyi_ai_relay_post_generation_request($slotId, 'images/generations', $apiKey, $payload, 90);
+    $result = chuyi_ai_relay_post_generation_request($slotId, 'images/generations', $apiKey, $payload, Settings::getImageGenerationTimeout());
     if (!$result['ok']) {
         return $result;
     }
@@ -707,6 +756,63 @@ function chuyi_ai_relay_request_image_generation(string $slotId, string $apiKey,
     return array('ok' => true, 'message' => $message);
 }
 
+function chuyi_ai_relay_apply_generation_defaults(array $payload, string $slotId): array
+{
+    $maxOutputTokens = Settings::getMaxOutputTokens();
+    if ($maxOutputTokens > 0 && !isset($payload['max_tokens'])) {
+        $payload['max_tokens'] = $maxOutputTokens;
+    }
+
+    $thinkingDepth = Settings::getThinkingDepth();
+    if ($thinkingDepth !== Settings::THINKING_DEPTH_OFF && !isset($payload['reasoning_effort'])) {
+        $payload['reasoning_effort'] = $thinkingDepth;
+    }
+
+    if (!isset($payload['metadata']) || !is_array($payload['metadata'])) {
+        $payload['metadata'] = array();
+    }
+    if (Settings::getContextMaxTokens() > 0 && !isset($payload['metadata']['chuyi_context_max_tokens'])) {
+        $payload['metadata']['chuyi_context_max_tokens'] = Settings::getContextMaxTokens();
+    }
+    if ($thinkingDepth !== Settings::THINKING_DEPTH_OFF && !isset($payload['metadata']['chuyi_thinking_depth'])) {
+        $payload['metadata']['chuyi_thinking_depth'] = $thinkingDepth;
+    }
+
+    if (Settings::getMode($slotId) === Settings::MODE_ANTHROPIC) {
+        unset($payload['reasoning_effort'], $payload['metadata']);
+
+        if (!isset($payload['max_tokens']) || (int) $payload['max_tokens'] <= 0) {
+            $payload['max_tokens'] = max(1, Settings::getMaxOutputTokens() ?: 512);
+        }
+        if ($thinkingDepth !== Settings::THINKING_DEPTH_OFF) {
+            $budgetTokens = chuyi_ai_relay_get_thinking_budget_tokens($thinkingDepth, (int) $payload['max_tokens']);
+            $payload['thinking'] = array(
+                'type' => 'enabled',
+                'budget_tokens' => $budgetTokens,
+            );
+            $payload['max_tokens'] = max((int) $payload['max_tokens'], $budgetTokens + 1);
+        }
+    }
+
+    return $payload;
+}
+
+function chuyi_ai_relay_get_thinking_budget_tokens(string $thinkingDepth, int $maxTokens): int
+{
+    $base = 1024;
+    if ($thinkingDepth === Settings::THINKING_DEPTH_HIGH) {
+        $base = 4096;
+    } elseif ($thinkingDepth === Settings::THINKING_DEPTH_MEDIUM) {
+        $base = 2048;
+    }
+
+    if ($maxTokens > 1) {
+        $base = min($base, max(1, $maxTokens - 1));
+    }
+
+    return max(1, $base);
+}
+
 function chuyi_ai_relay_request_chat_generation(string $slotId, string $apiKey, string $model, string $prompt, bool $image): array
 {
     $payload = array(
@@ -715,9 +821,13 @@ function chuyi_ai_relay_request_chat_generation(string $slotId, string $apiKey, 
     );
     if ($image) {
         $payload['modalities'] = array('image');
+    } else {
+        $payload = chuyi_ai_relay_apply_generation_defaults($payload, $slotId);
     }
 
-    $result = chuyi_ai_relay_post_generation_request($slotId, 'chat/completions', $apiKey, $payload, 60);
+    $globalTimeout = Settings::getImageGenerationTimeout();
+    $timeout = max(60, $globalTimeout);
+    $result = chuyi_ai_relay_post_generation_request($slotId, 'chat/completions', $apiKey, $payload, $timeout);
     if (!$result['ok']) {
         return $result;
     }
@@ -729,11 +839,13 @@ function chuyi_ai_relay_request_anthropic_generation(string $slotId, string $api
 {
     $payload = array(
         'model' => $model,
-        'max_tokens' => 512,
+        'max_tokens' => max(1, Settings::getMaxOutputTokens() ?: 512),
         'messages' => array(array('role' => 'user', 'content' => $prompt)),
     );
+    $payload = chuyi_ai_relay_apply_generation_defaults($payload, $slotId);
 
-    $result = chuyi_ai_relay_post_generation_request($slotId, 'messages', $apiKey, $payload, 60);
+    $timeout = max(60, Settings::getImageGenerationTimeout());
+    $result = chuyi_ai_relay_post_generation_request($slotId, 'messages', $apiKey, $payload, $timeout);
     if (!$result['ok']) {
         return $result;
     }

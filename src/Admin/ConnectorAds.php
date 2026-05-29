@@ -89,7 +89,9 @@ final class ConnectorAds
     private static function getCards(): array
     {
         $remoteCards = self::getRemoteCards();
-        return !empty($remoteCards) ? $remoteCards : self::getLocalCards();
+        $localCards = self::getLocalCards();
+
+        return !empty($localCards) ? $localCards : $remoteCards;
     }
 
     /**
@@ -193,10 +195,43 @@ final class ConnectorAds
                 continue;
             }
 
+            $description = isset($item['description']) && is_string($item['description']) ? sanitize_text_field($item['description']) : '';
+            $buttonText = isset($item['buttonText']) && is_string($item['buttonText']) ? sanitize_text_field($item['buttonText']) : __('前往', 'chuyi-ai-relay');
+            $icon = isset($item['icon']) && is_string($item['icon']) ? sanitize_key($item['icon']) : 'dreamax';
+            $iconUrl = isset($item['iconUrl']) && is_string($item['iconUrl']) ? self::normalizeAssetUrl($item['iconUrl']) : '';
+            $connectorClass = isset($item['connectorClass']) && is_string($item['connectorClass']) ? sanitize_html_class($item['connectorClass']) : '';
+            $itemClass = isset($item['itemClass']) && is_string($item['itemClass']) ? sanitize_text_field($item['itemClass']) : 'css-1bcj5ek';
+            $componentClass = isset($item['componentClass']) && is_string($item['componentClass']) ? sanitize_text_field($item['componentClass']) : 'css-1v73mal e19lxcc00';
+            $groupClass = isset($item['groupClass']) && is_string($item['groupClass']) ? sanitize_text_field($item['groupClass']) : 'components-flex components-h-stack components-v-stack css-8mn8b1 e19lxcc00';
+            $rowClass = isset($item['rowClass']) && is_string($item['rowClass']) ? sanitize_text_field($item['rowClass']) : 'components-flex components-h-stack css-1mfjabq e19lxcc00';
+            $contentClass = isset($item['contentClass']) && is_string($item['contentClass']) ? sanitize_text_field($item['contentClass']) : 'components-flex-item components-flex-block css-13y8vek e19lxcc00';
+            $textStackClass = isset($item['textStackClass']) && is_string($item['textStackClass']) ? sanitize_text_field($item['textStackClass']) : 'components-flex components-h-stack components-v-stack css-7a7sy7 e19lxcc00';
+            $titleClass = isset($item['titleClass']) && is_string($item['titleClass']) ? sanitize_text_field($item['titleClass']) : 'components-truncate components-text css-6jpe9g e19lxcc00';
+            $descriptionClass = isset($item['descriptionClass']) && is_string($item['descriptionClass']) ? sanitize_text_field($item['descriptionClass']) : 'components-truncate components-text css-8t07xj e19lxcc00';
+            $actionClass = isset($item['actionClass']) && is_string($item['actionClass']) ? sanitize_text_field($item['actionClass']) : 'components-flex components-h-stack css-ubkw7t e19lxcc00';
+            $buttonClass = isset($item['buttonClass']) && is_string($item['buttonClass']) ? sanitize_text_field($item['buttonClass']) : 'components-button is-secondary is-compact';
+
+            $id = isset($item['id']) && is_string($item['id']) ? sanitize_key($item['id']) : sanitize_key($title);
+
             $cards[] = array(
+                'id' => $id,
                 'title' => $title,
+                'description' => $description,
                 'url' => $url,
-                'icon' => self::normalizeAssetUrl(isset($item['icon']) && is_string($item['icon']) ? $item['icon'] : 'assets/images/chuyi-relay.svg'),
+                'buttonText' => $buttonText !== '' ? $buttonText : __('前往', 'chuyi-ai-relay'),
+                'icon' => $icon !== '' ? $icon : 'dreamax',
+                'iconUrl' => $iconUrl,
+                'itemClass' => $itemClass !== '' ? $itemClass : 'css-1bcj5ek',
+                'componentClass' => $componentClass !== '' ? $componentClass : 'css-1v73mal e19lxcc00',
+                'connectorClass' => $connectorClass !== '' ? $connectorClass : 'connector-item--ai-provider-for-' . $id,
+                'groupClass' => $groupClass,
+                'rowClass' => $rowClass,
+                'contentClass' => $contentClass,
+                'textStackClass' => $textStackClass,
+                'titleClass' => $titleClass,
+                'descriptionClass' => $descriptionClass,
+                'actionClass' => $actionClass,
+                'buttonClass' => $buttonClass,
             );
         }
 
@@ -226,12 +261,8 @@ final class ConnectorAds
     private static function getInlineStyles(): string
     {
         return '
-            .chuyi-ai-relay-connectors-ads{display:grid;gap:12px;margin:0 0 12px;color:#1d2327}
-            .chuyi-ai-relay-connectors-ads__grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
-            .chuyi-ai-relay-connectors-ad__card{display:grid;grid-template-columns:44px 1fr;gap:12px;padding:16px;border:1px solid #dcdcde;border-radius:12px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-            .chuyi-ai-relay-connectors-ad__icon{width:44px;height:44px;border-radius:10px;object-fit:contain;background:#f0f6ff;border:1px solid #dbeafe}
-            .chuyi-ai-relay-connectors-ad__title{margin:0 0 12px;font-size:15px;line-height:1.4;font-weight:700;color:#111827}
-            @media (max-width:782px){.chuyi-ai-relay-connectors-ads__grid{grid-template-columns:1fr}.chuyi-ai-relay-connectors-ad__card{grid-template-columns:40px 1fr}.chuyi-ai-relay-connectors-ad__icon{width:40px;height:40px}}
+            .chuyi-ai-relay-connector-ad{list-style:none}
+            .chuyi-ai-relay-connector-ad svg,.chuyi-ai-relay-connector-ad img{flex:0 0 auto;line-height:1}
         ';
     }
 }

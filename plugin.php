@@ -3,11 +3,9 @@
  * Plugin Name: 初一 AI 中转
  * Plugin URI: https://github.com/DearLicy/chuyi-ai-relay
  * Description: 为 WordPress AI Client 增加多中转、多协议模型池，支持 OpenAI-compatible 与 Anthropic Messages 接入。
- * Requires at least: 6.9
+ * Requires at least: 7.0
  * Requires PHP: 7.4
- * Version: 1.0.2
- * License: GPL-3.0-or-later
- * License URI: https://www.gnu.org/licenses/gpl-3.0.html
+ * Version: 1.0.3
  * Author: 李初一
  * Author URI: https://github.com/DearLicy
  */
@@ -30,7 +28,7 @@ if (!defined('ABSPATH')) {
 define('CHUYI_AI_RELAY_FILE', __FILE__);
 define('CHUYI_AI_RELAY_DIR', plugin_dir_path(__FILE__));
 define('CHUYI_AI_RELAY_URL', plugin_dir_url(__FILE__));
-define('CHUYI_AI_RELAY_VERSION', '1.0.2');
+define('CHUYI_AI_RELAY_VERSION', '1.0.3');
 
 require_once __DIR__ . '/src/autoload.php';
 require_once __DIR__ . '/src/Admin/SettingsPage.php';
@@ -111,6 +109,46 @@ function approve_own_connectors(): void
     }
 }
 add_action('init', __NAMESPACE__ . '\\approve_own_connectors', 20);
+
+function log_relay_http_debug($response, string $context, string $class, array $parsedArgs, string $url): void
+{
+    if ($context !== 'response') {
+        return;
+    }
+
+    $matched = false;
+    foreach (Settings::getRegisterableSlots() as $slotId => $slot) {
+        $baseUrl = Settings::getBaseUrl($slotId);
+        if ($baseUrl !== '' && strpos($url, rtrim($baseUrl, '/') . '/') === 0) {
+            $matched = true;
+            break;
+        }
+    }
+
+    if (!$matched) {
+        return;
+    }
+
+    if (is_wp_error($response)) {
+        error_log(sprintf(
+            '[chuyi-ai-relay] http response target=%s status=wp_error error=%s',
+            $url,
+            $response->get_error_message()
+        ));
+        return;
+    }
+
+    $status = wp_remote_retrieve_response_code($response);
+    $body = wp_remote_retrieve_body($response);
+    $preview = is_string($body) ? substr(preg_replace('/\s+/', ' ', $body) ?: $body, 0, 500) : '';
+    error_log(sprintf(
+        '[chuyi-ai-relay] http response target=%s status=%s body_preview=%s',
+        $url,
+        (string) $status,
+        $preview
+    ));
+}
+add_action('http_api_debug', __NAMESPACE__ . '\\log_relay_http_debug', 10, 5);
 
 function register_admin(): void
 {

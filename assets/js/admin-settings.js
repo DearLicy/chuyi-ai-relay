@@ -34,12 +34,23 @@
     const pages = config.pages || {};
     const assets = config.assets || {};
     const pageTitles = {
+        plugin: '插件设置',
         settings: '接入设置',
         relays: '中转管理',
         test: '模型测试',
         prompts: '提示词管理',
         help: '使用说明',
     };
+
+    function normalizeOptions(options) {
+        options = options && typeof options === 'object' ? options : {};
+        return {
+            context_max_tokens: parseInt(options.context_max_tokens || 0, 10) || 0,
+            max_output_tokens: parseInt(options.max_output_tokens || 0, 10) || 0,
+            thinking_depth: options.thinking_depth || 'off',
+            image_generation_timeout: parseInt(options.image_generation_timeout || 90, 10) || 90,
+        };
+    }
 
     function clonePrompts(prompts) {
         return (Array.isArray(prompts) ? prompts : []).map(function (prompt) {
@@ -177,8 +188,9 @@
         const [currentPage, setCurrentPage] = useState(initialPage);
         const [saving, setSaving] = useState(false);
         const [busy, setBusy] = useState('');
-        const [payload, setPayload] = useState({ relays: [], stats: {}, modes: [], imageEndpoints: [], capabilities: [] });
+        const [payload, setPayload] = useState({ relays: [], options: normalizeOptions({}), optionChoices: {}, stats: {}, modes: [], imageEndpoints: [], capabilities: [] });
         const [relays, setRelays] = useState([]);
+        const [pluginOptions, setPluginOptions] = useState(normalizeOptions({}));
         const [notice, setNotice] = useState(null);
         const [testState, setTestState] = useState({ slotId: '', type: 'text', model: '', prompt: '' });
         const [testResult, setTestResult] = useState('等待测试。');
@@ -191,6 +203,7 @@
             const shouldResetPageState = options && options.resetPageState;
             setPayload(data);
             setRelays(nextRelays);
+            setPluginOptions(normalizeOptions(data.options));
             setNotice(shouldResetPageState ? null : (data.notice || null));
             setTestState(function (prev) {
                 const first = nextRelays.find(function (relay) { return relay.enabled && relay.site_url; }) || nextRelays[0] || null;
@@ -308,9 +321,11 @@
                 try {
                     const url = new URL(value, window.location.href);
                     const pageParam = url.searchParams.get('page');
-                    return pageParam === 'chuyi-ai-relay-settings'
-                        ? 'settings'
-                        : (pageParam === 'chuyi-ai-relay-relays' ? 'relays' : (pageParam === 'chuyi-ai-relay-test' ? 'test' : (pageParam === 'chuyi-ai-relay-prompts' ? 'prompts' : (pageParam === 'chuyi-ai-relay-help' ? 'help' : ''))));
+                    return pageParam === 'chuyi-ai-relay-plugin'
+                        ? 'plugin'
+                        : (pageParam === 'chuyi-ai-relay-settings'
+                            ? 'settings'
+                            : (pageParam === 'chuyi-ai-relay-relays' ? 'relays' : (pageParam === 'chuyi-ai-relay-test' ? 'test' : (pageParam === 'chuyi-ai-relay-prompts' ? 'prompts' : (pageParam === 'chuyi-ai-relay-help' ? 'help' : '')))));
                 } catch (error) {
                     return '';
                 }
@@ -383,6 +398,30 @@
                     });
                     return Object.assign({}, relay, { models: models });
                 });
+            });
+        }
+
+        function savePluginOptions() {
+            setSaving(true);
+            return route('/plugin-options', {
+                method: 'POST',
+                data: { options: pluginOptions },
+            })
+                .then(function (data) {
+                    hydrate(data);
+                    return data;
+                })
+                .catch(function (error) {
+                    setNotice({ status: 'error', message: error.message || '插件设置保存失败。' });
+                })
+                .finally(function () {
+                    setSaving(false);
+                });
+        }
+
+        function updatePluginOption(key, value) {
+            setPluginOptions(function (options) {
+                return Object.assign({}, options, { [key]: value });
             });
         }
 
@@ -559,11 +598,14 @@
         }
 
         function renderHeader() {
-            const description = currentPage === 'settings'
-                ? '添加和编辑中转站，保存后会同步为 Connector provider。'
-                : (currentPage === 'relays' ? '查看运行中的中转接入，快速测速、拉取模型或清理配置。' : (currentPage === 'test' ? '选择已启用的中转站和模型，直接验证文本或生图链路。' : (currentPage === 'prompts' ? '查看和覆盖官方 AI 能力的默认系统提示词。' : '了解插件能力、配置流程、审批放行和打赏支持。')));
+            const description = currentPage === 'plugin'
+                ? '配置全局生成参数，作为官方 AI 功能调用初一中转时的统一默认值。'
+                : (currentPage === 'settings'
+                    ? '添加和编辑中转站，保存后会同步为 Connector provider。'
+                    : (currentPage === 'relays' ? '查看运行中的中转接入，快速测速、拉取模型或清理配置。' : (currentPage === 'test' ? '选择已启用的中转站和模型，直接验证文本或生图链路。' : (currentPage === 'prompts' ? '查看和覆盖官方 AI 能力的默认系统提示词。' : '了解插件能力、配置流程、审批放行和打赏支持。'))));
             const navItems = [
                 { key: 'help', label: '使用说明', href: pages.help },
+                { key: 'plugin', label: '插件设置', href: pages.plugin },
                 { key: 'settings', label: '接入设置', href: pages.settings },
                 { key: 'relays', label: '中转管理', href: pages.relays },
                 { key: 'test', label: '模型测试', href: pages.test },
@@ -601,6 +643,66 @@
                 h(StatCard, { label: '中转数量', value: String(stats.totalRelays || relays.length), desc: '当前保存的中转配置' }),
                 h(StatCard, { label: '已启用', value: String(stats.enabledRelays || 0), desc: '会注册为 Connector provider' }),
                 h(StatCard, { label: '模型数量', value: String(stats.totalModels || 0), desc: '已保存的模型池总数' })
+            );
+        }
+
+        function renderPluginPage() {
+            const thinkingDepths = payload.optionChoices && Array.isArray(payload.optionChoices.thinkingDepths)
+                ? payload.optionChoices.thinkingDepths
+                : [
+                    { label: '关闭', value: 'off' },
+                    { label: '低', value: 'low' },
+                    { label: '中', value: 'medium' },
+                    { label: '高', value: 'high' },
+                ];
+
+            return h('section', { className: 'chuyi-ai-relay-section' },
+                h('div', { className: 'chuyi-ai-relay-section__head' },
+                    h('div', null,
+                        h('h2', null, '全局生成参数'),
+                        h('p', null, '这些参数用于初一中转模型层。官方 AI 插件后续原生兼容后，可以直接移除此接管层。')
+                    ),
+                    h('div', { className: 'chuyi-ai-relay-actions' },
+                        h(Button, { variant: 'primary', isBusy: saving, disabled: saving, onClick: savePluginOptions }, saving ? '保存中...' : '保存插件设置')
+                    )
+                ),
+                h(Card, { className: 'chuyi-ai-relay-test-card' },
+                    h(CardBody, null,
+                        h('div', { className: 'chuyi-ai-relay-form-grid' },
+                            h(TextControl, {
+                                label: '上下文最大 token',
+                                type: 'number',
+                                min: 0,
+                                help: '0 表示不由插件限制。后续用于请求前上下文预算控制。',
+                                value: String(pluginOptions.context_max_tokens || 0),
+                                onChange: function (value) { updatePluginOption('context_max_tokens', value); },
+                            }),
+                            h(TextControl, {
+                                label: '最大输出 token',
+                                type: 'number',
+                                min: 0,
+                                help: '0 表示沿用官方 AI 功能或模型默认值。',
+                                value: String(pluginOptions.max_output_tokens || 0),
+                                onChange: function (value) { updatePluginOption('max_output_tokens', value); },
+                            }),
+                            h(SelectControl, {
+                                label: '思考深度',
+                                help: '仅对支持 reasoning/thinking 的中转或模型生效。',
+                                value: pluginOptions.thinking_depth || 'off',
+                                options: thinkingDepths,
+                                onChange: function (value) { updatePluginOption('thinking_depth', value); },
+                            }),
+                            h(TextControl, {
+                                label: '图片生成最大时间（秒）',
+                                type: 'number',
+                                min: 10,
+                                help: '默认 90 秒。用于接管官方 AI 插件生图请求和图片 URL 下载。',
+                                value: String(pluginOptions.image_generation_timeout || 90),
+                                onChange: function (value) { updatePluginOption('image_generation_timeout', value); },
+                            })
+                        )
+                    )
+                )
             );
         }
 
@@ -883,6 +985,7 @@
         return h('div', { className: 'chuyi-ai-relay-app' },
             renderHeader(),
             renderNotice(),
+            currentPage === 'plugin' && renderPluginPage(),
             currentPage === 'settings' && renderSettingsPage(),
             currentPage === 'relays' && renderRelaysPage(),
             currentPage === 'test' && renderTestPage(),

@@ -9,8 +9,12 @@ declare(strict_types=1);
 
 namespace WordPress\ChuyiAiRelay\Abilities;
 
+use WordPress\ChuyiAiRelay\Abilities\Image\GenerateImage;
+use WordPress\ChuyiAiRelay\Abilities\Image\GenerateImagePrompt;
+use WordPress\ChuyiAiRelay\Abilities\Image\ImportBase64Image;
 use WordPress\ChuyiAiRelay\Prompts\DefaultPrompts;
 use WordPress\ChuyiAiRelay\Prompts\PromptOverrides;
+use WordPress\ChuyiAiRelay\Settings;
 
 if (!defined('ABSPATH')) {
     return;
@@ -27,6 +31,8 @@ final class Registry
     {
         add_action('wp_abilities_api_categories_init', array(__CLASS__, 'registerCategory'));
         add_action('wp_abilities_api_init', array(__CLASS__, 'registerAbilities'));
+        add_action('wp_abilities_api_init', array(__CLASS__, 'replaceImageAbilities'), 100);
+        add_action('plugins_loaded', array(__CLASS__, 'registerImageModelFilters'), 20);
     }
 
     public static function registerCategory(): void
@@ -54,6 +60,146 @@ final class Registry
         self::registerSavePromptOverrideAbility();
         self::registerDeletePromptOverrideAbility();
         self::registerSetPromptOverrideEnabledAbility();
+    }
+
+    public static function replaceImageAbilities(): void
+    {
+        if (!function_exists('wp_register_ability')) {
+            return;
+        }
+
+        foreach (array('ai/image-generation', 'ai/image-import', 'ai/image-prompt-generation') as $abilityName) {
+            if (function_exists('wp_has_ability') && wp_has_ability($abilityName) && function_exists('wp_unregister_ability')) {
+                wp_unregister_ability($abilityName);
+            }
+        }
+
+        wp_register_ability(
+            'ai/image-generation',
+            array(
+                'label'         => __('Image Generation and Editing', 'ai'),
+                'description'   => __('Generate and edit images using AI. Requires an AI connector that includes support for image generation models.', 'ai'),
+                'ability_class' => GenerateImage::class,
+            )
+        );
+
+        wp_register_ability(
+            'ai/image-import',
+            array(
+                'label'         => __('Base64 Image Import', 'ai'),
+                'description'   => __('Imports a base64 encoded image into the media library', 'ai'),
+                'ability_class' => ImportBase64Image::class,
+            )
+        );
+
+        wp_register_ability(
+            'ai/image-prompt-generation',
+            array(
+                'label'         => __('Image Prompt Generation', 'ai'),
+                'description'   => __('Generates a prompt from post content that can be used to generate an image', 'ai'),
+                'ability_class' => GenerateImagePrompt::class,
+            )
+        );
+    }
+
+    public static function registerImageModelFilters(): void
+    {
+        add_filter('wpai_preferred_image_models', array(__CLASS__, 'filterPreferredImageModels'), 5);
+        add_filter('wpai_is_image_generation_connector_configured', array(__CLASS__, 'forceImageGenerationConnectorConfigured'), 5, 2);
+    }
+
+    /**
+     * @param bool $configured
+     * @param array<string, mixed> $connectorData
+     */
+    public static function forceImageGenerationConnectorConfigured($configured, array $connectorData): bool
+    {
+        if ($configured) {
+            return true;
+        }
+
+        $connectorSlug = isset($connectorData['slug']) && is_string($connectorData['slug']) ? sanitize_key($connectorData['slug']) : '';
+        if ($connectorSlug === '' || strpos($connectorSlug, 'chuyi-relay') !== 0) {
+            return (bool) $configured;
+        }
+
+        $slotId = Settings::getSlotIdForProviderId($connectorSlug);
+        return Settings::getMode($slotId) === Settings::MODE_OPENAI && !empty(Settings::getModels($slotId));
+    }
+
+    /**
+     * @param array<int, array{string, string}> $preferredModels
+     * @return array<int, array{string, string}>
+     */
+    public static function filterPreferredImageModels(array $preferredModels): array
+    {
+        $configured = get_option('wpai_feature_image-generation_field_developer', array());
+        if (is_array($configured) && !empty($configured['provider']) && !empty($configured['model'])) {
+            return $preferredModels;
+        }
+
+        return self::appendPreferredImageModels($preferredModels);
+    }
+
+    /**
+     * @param array<int, array{string, string}> $preferredModels
+     * @return array<int, array{string, string}>
+     */
+    private static function appendPreferredImageModels(array $preferredModels): array
+    {
+        $preferred = array();
+        $seen = array();
+
+        foreach ($preferredModels as $item) {
+            if (!is_array($item) || count($item) < 2) {
+                continue;
+            }
+
+            $providerId = is_string($item[0]) ? $item[0] : '';
+            $modelId = is_string($item[1]) ? $item[1] : '';
+            if ($providerId === '' || $modelId === '') {
+                continue;
+            }
+
+            $key = $providerId . '|' . $modelId;
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $preferred[] = array($providerId, $modelId);
+            $seen[$key] = true;
+        }
+
+        foreach (Settings::getRegisterableSlots() as $slotId => $slot) {
+            if (Settings::getMode($slotId) !== Settings::MODE_OPENAI) {
+                continue;
+            }
+
+            $providerId = Settings::getProviderIdForSlot($slotId);
+            $models = isset($slot['models']) && is_array($slot['models']) ? $slot['models'] : array();
+            foreach ($models as $model) {
+                if (!is_array($model) || empty($model['id']) || !is_string($model['id'])) {
+                    continue;
+                }
+
+                $modelCapabilities = isset($model['capabilities']) && is_array($model['capabilities'])
+                    ? Settings::sanitizeCapabilities($model['capabilities'])
+                    : Settings::inferCapabilities($model['id']);
+                if (!in_array('image_generation', $modelCapabilities, true)) {
+                    continue;
+                }
+
+                $key = $providerId . '|' . $model['id'];
+                if (isset($seen[$key])) {
+                    continue;
+                }
+
+                $preferred[] = array($providerId, $model['id']);
+                $seen[$key] = true;
+            }
+        }
+
+        return $preferred;
     }
 
     private static function registerListPromptOverridesAbility(): void

@@ -15,6 +15,7 @@ namespace WordPress\ChuyiAiRelay;
 final class Settings
 {
     public const SLOTS_OPTION = 'chuyi_ai_relay_slots';
+    public const OPTIONS_OPTION = 'chuyi_ai_relay_options';
     public const RELAYS_KEY = 'relays';
     public const DEFAULT_SLOT_ID = 'default';
     public const MODE_OPENAI = 'openai';
@@ -22,6 +23,10 @@ final class Settings
     public const IMAGE_ENDPOINT_AUTO = 'auto';
     public const IMAGE_ENDPOINT_IMAGE = 'image';
     public const IMAGE_ENDPOINT_CHAT = 'chat';
+    public const THINKING_DEPTH_OFF = 'off';
+    public const THINKING_DEPTH_LOW = 'low';
+    public const THINKING_DEPTH_MEDIUM = 'medium';
+    public const THINKING_DEPTH_HIGH = 'high';
 
     /**
      * Returns normalized relay rows from the dynamic group.
@@ -45,6 +50,89 @@ final class Settings
         }
 
         return $relays;
+    }
+
+    /**
+     * Returns normalized plugin-wide generation settings.
+     *
+     * @return array{context_max_tokens:int,max_output_tokens:int,thinking_depth:string,image_generation_timeout:int}
+     */
+    public static function getOptions(): array
+    {
+        $stored = get_option(self::OPTIONS_OPTION, array());
+        return self::normalizeOptions($stored);
+    }
+
+    /**
+     * Saves plugin-wide generation settings.
+     *
+     * @param mixed $options Raw settings payload.
+     */
+    public static function saveOptions($options): void
+    {
+        update_option(self::OPTIONS_OPTION, self::normalizeOptions($options), false);
+    }
+
+    /**
+     * Normalizes plugin-wide generation settings.
+     *
+     * @param mixed $options Raw settings payload.
+     * @return array{context_max_tokens:int,max_output_tokens:int,thinking_depth:string,image_generation_timeout:int}
+     */
+    public static function normalizeOptions($options): array
+    {
+        $options = is_array($options) ? $options : array();
+        $defaults = self::getDefaultOptions();
+
+        $thinkingDepth = isset($options['thinking_depth']) && is_string($options['thinking_depth'])
+            ? sanitize_key($options['thinking_depth'])
+            : $defaults['thinking_depth'];
+        if (!in_array($thinkingDepth, array(self::THINKING_DEPTH_OFF, self::THINKING_DEPTH_LOW, self::THINKING_DEPTH_MEDIUM, self::THINKING_DEPTH_HIGH), true)) {
+            $thinkingDepth = $defaults['thinking_depth'];
+        }
+
+        return array(
+            'context_max_tokens'      => self::normalizePositiveInt($options['context_max_tokens'] ?? $defaults['context_max_tokens'], 0, 1000000),
+            'max_output_tokens'       => self::normalizePositiveInt($options['max_output_tokens'] ?? $defaults['max_output_tokens'], 0, 200000),
+            'thinking_depth'          => $thinkingDepth,
+            'image_generation_timeout'=> self::normalizePositiveInt($options['image_generation_timeout'] ?? $defaults['image_generation_timeout'], 10, 3600),
+        );
+    }
+
+    /**
+     * Returns the configured image generation timeout in seconds.
+     */
+    public static function getImageGenerationTimeout(): int
+    {
+        $options = self::getOptions();
+        return $options['image_generation_timeout'];
+    }
+
+    /**
+     * Returns the configured max output token limit. 0 means do not override downstream settings.
+     */
+    public static function getMaxOutputTokens(): int
+    {
+        $options = self::getOptions();
+        return $options['max_output_tokens'];
+    }
+
+    /**
+     * Returns the configured context token budget. 0 means no plugin-level trimming.
+     */
+    public static function getContextMaxTokens(): int
+    {
+        $options = self::getOptions();
+        return $options['context_max_tokens'];
+    }
+
+    /**
+     * Returns the configured thinking depth.
+     */
+    public static function getThinkingDepth(): string
+    {
+        $options = self::getOptions();
+        return $options['thinking_depth'];
     }
 
     /**
@@ -255,7 +343,16 @@ final class Settings
     public static function getBaseUrl(string $slotId = self::DEFAULT_SLOT_ID): string
     {
         $siteUrl = self::getSiteUrl($slotId);
-        return $siteUrl === '' ? '' : rtrim($siteUrl, '/') . '/v1';
+        if ($siteUrl === '') {
+            return '';
+        }
+
+        $siteUrl = rtrim($siteUrl, '/');
+        $siteUrl = preg_replace('#/(chat/completions|images/generations|models)$#i', '', $siteUrl) ?: $siteUrl;
+
+        return preg_match('#/v\d+$#i', $siteUrl)
+            ? $siteUrl
+            : $siteUrl . '/v1';
     }
 
     /**
@@ -347,10 +444,16 @@ final class Settings
 
         $scheme = strtolower((string) $parts['scheme']);
         $host = strtolower((string) $parts['host']);
+        $path = isset($parts['path']) && is_string($parts['path']) ? '/' . trim($parts['path'], '/') : '';
+        if ($path === '/') {
+            $path = '';
+        }
+
         $normalized = $scheme . '://' . $host;
         if (!empty($parts['port'])) {
             $normalized .= ':' . (int) $parts['port'];
         }
+        $normalized .= $path;
 
         return esc_url_raw($normalized);
     }
@@ -512,6 +615,36 @@ final class Settings
         $slots = array_keys(self::getSlots());
         $index = array_search(self::normalizeSlotId($slotId), $slots, true);
         return is_int($index) ? $index : 0;
+    }
+
+    /**
+     * Returns default plugin-wide generation settings.
+     *
+     * @return array{context_max_tokens:int,max_output_tokens:int,thinking_depth:string,image_generation_timeout:int}
+     */
+    private static function getDefaultOptions(): array
+    {
+        return array(
+            'context_max_tokens'       => 0,
+            'max_output_tokens'        => 0,
+            'thinking_depth'           => self::THINKING_DEPTH_OFF,
+            'image_generation_timeout' => 90,
+        );
+    }
+
+    /**
+     * Normalizes an integer setting into an allowed inclusive range. 0 is allowed only when the minimum is 0.
+     *
+     * @param mixed $value Raw integer-like value.
+     */
+    private static function normalizePositiveInt($value, int $min, int $max): int
+    {
+        $number = is_numeric($value) ? (int) $value : $min;
+        if ($number <= 0 && $min === 0) {
+            return 0;
+        }
+
+        return max($min, min($max, $number));
     }
 
     /**
