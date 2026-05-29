@@ -48,31 +48,31 @@
 
 ```mermaid
 flowchart LR
-    A[官方 AI 图片能力] --> B[WP AI Client]
-    B --> C[初一 ChuyiRelayImageGenerationModel]
-    C --> D{选择生成通道}
+    A["官方 AI 图片能力"] --> B["WP AI Client"]
+    B --> C["初一 ChuyiRelayImageGenerationModel"]
+    C --> D{"选择生成通道"}
 
-    D -->|图片接口| E[/v1/images/generations]
-    D -->|对话接口| F[/v1/chat/completions 或 /v1/messages]
+    D -->|"图片接口"| E["/v1/images/generations"]
+    D -->|"对话接口"| F["/v1/chat/completions 或 /v1/messages"]
 
-    E --> G{接口返回内容}
+    E --> G{"接口返回内容"}
     F --> G
 
-    G -->|base64| H[直接提取 base64]
-    G -->|data:image/...;base64,...| I[提取图片 base64]
-    G -->|图片 URL| J[临时下载远程图片]
-    G -->|Markdown 包裹 URL| K[从 Markdown 提取 URL]
-    G -->|Markdown 包裹 base64| L[从 Markdown 提取 base64]
+    G -->|"base64"| H["直接提取 base64"]
+    G -->|"data image base64"| I["提取图片 base64"]
+    G -->|"图片 URL"| J["临时下载远程图片"]
+    G -->|"Markdown 包裹 URL"| K["从 Markdown 提取 URL"]
+    G -->|"Markdown 包裹 base64"| L["从 Markdown 提取 base64"]
 
     K --> J
-    J --> M[转换为 base64]
-    H --> N[统一图片数据]
+    J --> M["转换为 base64"]
+    H --> N["统一图片数据"]
     I --> N
     L --> N
     M --> N
 
-    N --> O[OpenAI compatible image data]
-    O --> P[返回给官方 AI 插件处理]
+    N --> O["OpenAI compatible image data"]
+    O --> P["返回给官方 AI 插件处理"]
 ```
 
 简化理解：
